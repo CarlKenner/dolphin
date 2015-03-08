@@ -1,4 +1,4 @@
-// Copyright 2013 Dolphin Emulator Project
+// Copyright 2014 Dolphin Emulator Project
 // Licensed under GPLv2
 // Refer to the license.txt file included.
 
@@ -15,132 +15,197 @@ SConfig* SConfig::m_Instance;
 static const struct
 {
 	const char* IniText;
+	const bool  KBM;
+	const bool  DInput;
 	const int   DefaultKey;
 	const int   DefaultModifier;
+	const u32   DandXInputMapping;
+	const u32   DInputMappingExtra;
 } g_HKData[] = {
-	{ "Open",                79 /* 'O' */,        2 /* wxMOD_CONTROL */},
-	{ "ChangeDisc",          0,                   0 /* wxMOD_NONE */ },
-	{ "RefreshList",         0,                   0 /* wxMOD_NONE */ },
+	{ "Open",                 true, false, 79 /* 'O' */,        2 /* wxMOD_CONTROL */, 0, 0 },
+	{ "ChangeDisc",           true, false, 0,                   0 /* wxMOD_NONE */,    0, 0 },
+	{ "RefreshList",          true, false, 0,                   0 /* wxMOD_NONE */,    0, 0 },
 #ifdef __APPLE__
-	{ "PlayPause",           80 /* 'P' */,        2 /* wxMOD_CMD */ },
-	{ "Stop",                87 /* 'W' */,        2 /* wxMOD_CMD */ },
-	{ "Reset",               0,                   0 /* wxMOD_NONE */ },
-	{ "FrameAdvance",        0,                   0 /* wxMOD_NONE */ },
+	{ "PlayPause",            true, false, 80 /* 'P' */,        2 /* wxMOD_CMD */,     0, 0 },
+	{ "Stop",                 true, false, 87 /* 'W' */,        2 /* wxMOD_CMD */,     0, 0 },
+	{ "Reset",                true, false, 0,                   0 /* wxMOD_NONE */,    0, 0 },
+	{ "FrameAdvance",         true, false, 0,                   0 /* wxMOD_NONE */,    0, 0 },
 
-	{ "StartRecording",      0,                   0 /* wxMOD_NONE */ },
-	{ "PlayRecording",       0,                   0 /* wxMOD_NONE */ },
-	{ "ExportRecording",     0,                   0 /* wxMOD_NONE */ },
-	{ "Readonlymode",        0,                   0 /* wxMOD_NONE */ },
+	{ "StartRecording",       true, false, 0,                   0 /* wxMOD_NONE */,    0, 0 },
+	{ "PlayRecording",        true, false, 0,                   0 /* wxMOD_NONE */,    0, 0 },
+	{ "ExportRecording",      true, false, 0,                   0 /* wxMOD_NONE */,    0, 0 },
+	{ "Readonlymode",         true, false, 0,                   0 /* wxMOD_NONE */,    0, 0 },
 
-	{ "ToggleFullscreen",    70 /* 'F' */,        2 /* wxMOD_CMD */ },
-	{ "Screenshot",          83 /* 'S' */,        2 /* wxMOD_CMD */ },
-	{ "Exit",                0,                   0 /* wxMOD_NONE */ },
+	{ "ToggleFullscreen",     true, false, 70 /* 'F' */,        2 /* wxMOD_CMD */,     0, 0 },
+	{ "Screenshot",           true, false, 83 /* 'S' */,        2 /* wxMOD_CMD */,     0, 0 },
+	{ "Exit",                 true, false, 0,                   0 /* wxMOD_NONE */,    0, 0 },
 
-	{ "Wiimote1Connect",     49 /* '1' */,        2 /* wxMOD_CMD */ },
-	{ "Wiimote2Connect",     50 /* '2' */,        2 /* wxMOD_CMD */ },
-	{ "Wiimote3Connect",     51 /* '3' */,        2 /* wxMOD_CMD */ },
-	{ "Wiimote4Connect",     52 /* '4' */,        2 /* wxMOD_CMD */ },
-	{ "BalanceBoardConnect", 53 /* '4' */,        2 /* wxMOD_CMD */ },
+	{ "Wiimote1Connect",      true, false, 49 /* '1' */,        2 /* wxMOD_CMD */,     0, 0 },
+	{ "Wiimote2Connect",      true, false, 50 /* '2' */,        2 /* wxMOD_CMD */,     0, 0 },
+	{ "Wiimote3Connect",      true, false, 51 /* '3' */,        2 /* wxMOD_CMD */,     0, 0 },
+	{ "Wiimote4Connect",      true, false, 52 /* '4' */,        2 /* wxMOD_CMD */,     0, 0 },
+	{ "BalanceBoardConnect",  true, false, 53 /* '4' */,        2 /* wxMOD_CMD */,     0, 0 },
 #else
-	{ "PlayPause",           349 /* WXK_F10 */,   0 /* wxMOD_NONE */ },
-	{ "Stop",                27 /* WXK_ESCAPE */, 0 /* wxMOD_NONE */ },
-	{ "Reset",               0,                   0 /* wxMOD_NONE */ },
-	{ "FrameAdvance",        0,                   0 /* wxMOD_NONE */ },
+	{ "PlayPause",            true, false, 349 /* WXK_F10 */,   0 /* wxMOD_NONE */,    0, 0 },
+	{ "Stop",                 true, false, 27 /* WXK_ESCAPE */, 0 /* wxMOD_NONE */,    0, 0 },
+	{ "Reset",                true, false, 0,                   0 /* wxMOD_NONE */,    0, 0 },
+	{ "FrameAdvance",         true, false, 0,                   0 /* wxMOD_NONE */,    0, 0 },
 
-	{ "StartRecording",      0,                   0 /* wxMOD_NONE */ },
-	{ "PlayRecording",       0,                   0 /* wxMOD_NONE */ },
-	{ "ExportRecording",     0,                   0 /* wxMOD_NONE */ },
-	{ "Readonlymode",        0,                   0 /* wxMOD_NONE */ },
+	{ "StartRecording",       true, false, 0,                   0 /* wxMOD_NONE */,    0, 0 },
+	{ "PlayRecording",        true, false, 0,                   0 /* wxMOD_NONE */,    0, 0 },
+	{ "ExportRecording",      true, false, 0,                   0 /* wxMOD_NONE */,    0, 0 },
+	{ "Readonlymode",         true, false, 0,                   0 /* wxMOD_NONE */,    0, 0 },
 
-	{ "ToggleFullscreen",   13 /* WXK_RETURN */,  1 /* wxMOD_ALT */ },
-	{ "Screenshot",         348 /* WXK_F9 */,     0 /* wxMOD_NONE */ },
-	{ "Exit",                0,                   0 /* wxMOD_NONE */ },
+	{ "ToggleFullscreen",     true, false, 13 /* WXK_RETURN */, 1 /* wxMOD_ALT */,     0, 0 },
+	{ "Screenshot",           true, false, 348 /* WXK_F9 */,    0 /* wxMOD_NONE */,    0, 0 },
+	{ "Exit",                 true, false, 0,                   0 /* wxMOD_NONE */,    0, 0 },
 
-	{ "Wiimote1Connect",    344 /* WXK_F5 */,     1 /* wxMOD_ALT */ },
-	{ "Wiimote2Connect",    345 /* WXK_F6 */,     1 /* wxMOD_ALT */ },
-	{ "Wiimote3Connect",    346 /* WXK_F7 */,     1 /* wxMOD_ALT */ },
-	{ "Wiimote4Connect",    347 /* WXK_F8 */,     1 /* wxMOD_ALT */ },
-	{ "BalanceBoardConnect",348 /* WXK_F9 */,     1 /* wxMOD_ALT */ },
+	{ "Wiimote1Connect",      true, false, 344 /* WXK_F5 */,    1 /* wxMOD_ALT */,     0, 0 },
+	{ "Wiimote2Connect",      true, false, 345 /* WXK_F6 */,    1 /* wxMOD_ALT */,     0, 0 },
+	{ "Wiimote3Connect",      true, false, 346 /* WXK_F7 */,    1 /* wxMOD_ALT */,     0, 0 },
+	{ "Wiimote4Connect",      true, false, 347 /* WXK_F8 */,    1 /* wxMOD_ALT */,     0, 0 },
+	{ "BalanceBoardConnect",  true, false, 348 /* WXK_F9 */,    1 /* wxMOD_ALT */,     0, 0 },
 #endif
 
-	{ "VolumeDown",          0,                    0 /* wxMOD_NONE */ },
-	{ "VolumeUp",            0,                    0 /* wxMOD_NONE */ },
-	{ "VolumeToggleMute",    0,                    0 /* wxMOD_NONE */ },
+	{ "VolumeDown",          true, false, 0,                    0 /* wxMOD_NONE */,    0, 0 },
+	{ "VolumeUp",            true, false, 0,                    0 /* wxMOD_NONE */,    0, 0 },
+	{ "VolumeToggleMute",    true, false, 0,                    0 /* wxMOD_NONE */,    0, 0 },
 
-	{ "ToggleIR",            0,                   0 /* wxMOD_NONE */ },
-	{ "ToggleAspectRatio",   0,                   0 /* wxMOD_NONE */ },
-	{ "ToggleEFBCopies",     0,                   0 /* wxMOD_NONE */ },
-	{ "ToggleFog",           0,                   0 /* wxMOD_NONE */ },
-	{ "ToggleThrottle",      9 /* '\t' */,        0 /* wxMOD_NONE */ },
-	{ "DecreaseFrameLimit",  0,                   0 /* wxMOD_NONE */ },
-	{ "IncreaseFrameLimit",  0,                   0 /* wxMOD_NONE */ },
+	{ "ToggleIR",             true, false, 0,                   0 /* wxMOD_NONE */,    0, 0 },
+	{ "ToggleAspectRatio",    true, false, 0,                   0 /* wxMOD_NONE */,    0, 0 },
+	{ "ToggleEFBCopies",      true, false, 0,                   0 /* wxMOD_NONE */,    0, 0 },
+	{ "ToggleFog",            true, false, 0,                   0 /* wxMOD_NONE */,    0, 0 },
+	{ "ToggleThrottle",       true, false, 9 /* '\t' */,        0 /* wxMOD_NONE */,    0, 0 },
+	{ "DecreaseFrameLimit",   true, false, 0,                   0 /* wxMOD_NONE */,    0, 0 },
+	{ "IncreaseFrameLimit",   true, false, 0,                   0 /* wxMOD_NONE */,    0, 0 },
 
-	{ "FreelookDecreaseSpeed",49 /* '1' */,       4 /* wxMOD_SHIFT */ },
-	{ "FreelookIncreaseSpeed",50 /* '2' */,       4 /* wxMOD_SHIFT */ },
-	{ "FreelookResetSpeed",   70 /* 'F' */,       4 /* wxMOD_SHIFT */ },
-	{ "FreelookUp",           69 /* 'E' */,       4 /* wxMOD_SHIFT */ },
-	{ "FreelookDown",         81 /* 'Q' */,       4 /* wxMOD_SHIFT */ },
-	{ "FreelookLeft",         65 /* 'A' */,       4 /* wxMOD_SHIFT */ },
-	{ "FreelookRight",        68 /* 'D' */,       4 /* wxMOD_SHIFT */ },
-	{ "FreelookZoomIn",       87 /* 'W' */,       4 /* wxMOD_SHIFT */ },
-	{ "FreelookZoomOut",      83 /* 'S' */,       4 /* wxMOD_SHIFT */ },
-	{ "FreelookReset",        82 /* 'R' */,       4 /* wxMOD_SHIFT */ },
+	{ "FreelookDecreaseSpeed", true, false, 49 /* '1' */,       4 /* wxMOD_SHIFT */,   0, 0 },
+	{ "FreelookIncreaseSpeed", true, false, 50 /* '2' */,       4 /* wxMOD_SHIFT */,   0, 0 },
+	{ "FreelookResetSpeed",    true, false, 70 /* 'F' */,       4 /* wxMOD_SHIFT */,   0, 0 },
+	{ "FreelookUp",            true, false, 69 /* 'E' */,       4 /* wxMOD_SHIFT */,   0, 0 },
+	{ "FreelookDown",          true, false, 81 /* 'Q' */,       4 /* wxMOD_SHIFT */,   0, 0 },
+	{ "FreelookLeft",          true, false, 65 /* 'A' */,       4 /* wxMOD_SHIFT */,   0, 0 },
+	{ "FreelookRight",         true, false, 68 /* 'D' */,       4 /* wxMOD_SHIFT */,   0, 0 },
+	{ "FreelookZoomIn",        true, false, 87 /* 'W' */,       4 /* wxMOD_SHIFT */,   0, 0 },
+	{ "FreelookZoomOut",       true, false, 83 /* 'S' */,       4 /* wxMOD_SHIFT */,   0, 0 },
+	{ "FreelookReset",         true, false, 82 /* 'R' */,       4 /* wxMOD_SHIFT */,   0, 0 },
 
-	{ "DecreaseDepth",       0,                   0 /* wxMOD_NONE */ },
-	{ "IncreaseDepth",       0,                   0 /* wxMOD_NONE */ },
-	{ "DecreaseConvergence", 0,                   0 /* wxMOD_NONE */ },
-	{ "IncreaseConvergence", 0,                   0 /* wxMOD_NONE */ },
+	{ "DecreaseDepth",        true, false, 0,                   0 /* wxMOD_NONE */,    0, 0 },
+	{ "IncreaseDepth",        true, false, 0,                   0 /* wxMOD_NONE */,    0, 0 },
+	{ "DecreaseConvergence",  true, false, 0,                   0 /* wxMOD_NONE */,    0, 0 },
+	{ "IncreaseConvergence",  true, false, 0,                   0 /* wxMOD_NONE */,    0, 0 },
 
-	{ "LoadStateSlot1",      340 /* WXK_F1 */,    0 /* wxMOD_NONE */ },
-	{ "LoadStateSlot2",      341 /* WXK_F2 */,    0 /* wxMOD_NONE */ },
-	{ "LoadStateSlot3",      342 /* WXK_F3 */,    0 /* wxMOD_NONE */ },
-	{ "LoadStateSlot4",      343 /* WXK_F4 */,    0 /* wxMOD_NONE */ },
-	{ "LoadStateSlot5",      344 /* WXK_F5 */,    0 /* wxMOD_NONE */ },
-	{ "LoadStateSlot6",      345 /* WXK_F6 */,    0 /* wxMOD_NONE */ },
-	{ "LoadStateSlot7",      346 /* WXK_F7 */,    0 /* wxMOD_NONE */ },
-	{ "LoadStateSlot8",      347 /* WXK_F8 */,    0 /* wxMOD_NONE */ },
-	{ "LoadStateSlot9",      0,                   0 /* wxMOD_NONE */ },
-	{ "LoadStateSlot10",     0,                   0 /* wxMOD_NONE */ },
+	{ "LoadStateSlot1",       true, false, 340 /* WXK_F1 */,    0 /* wxMOD_NONE */,    0, 0 },
+	{ "LoadStateSlot2",       true, false, 341 /* WXK_F2 */,    0 /* wxMOD_NONE */,    0, 0 },
+	{ "LoadStateSlot3",       true, false, 342 /* WXK_F3 */,    0 /* wxMOD_NONE */,    0, 0 },
+	{ "LoadStateSlot4",       true, false, 343 /* WXK_F4 */,    0 /* wxMOD_NONE */,    0, 0 },
+	{ "LoadStateSlot5",       true, false, 344 /* WXK_F5 */,    0 /* wxMOD_NONE */,    0, 0 },
+	{ "LoadStateSlot6",       true, false, 345 /* WXK_F6 */,    0 /* wxMOD_NONE */,    0, 0 },
+	{ "LoadStateSlot7",       true, false, 346 /* WXK_F7 */,    0 /* wxMOD_NONE */,    0, 0 },
+	{ "LoadStateSlot8",       true, false, 347 /* WXK_F8 */,    0 /* wxMOD_NONE */,    0, 0 },
+	{ "LoadStateSlot9",       true, false, 0,                   0 /* wxMOD_NONE */,    0, 0 },
+	{ "LoadStateSlot10",      true, false, 0,                   0 /* wxMOD_NONE */,    0, 0 },
 
-	{ "SaveStateSlot1",      340 /* WXK_F1 */,    4 /* wxMOD_SHIFT */ },
-	{ "SaveStateSlot2",      341 /* WXK_F2 */,    4 /* wxMOD_SHIFT */ },
-	{ "SaveStateSlot3",      342 /* WXK_F3 */,    4 /* wxMOD_SHIFT */ },
-	{ "SaveStateSlot4",      343 /* WXK_F4 */,    4 /* wxMOD_SHIFT */ },
-	{ "SaveStateSlot5",      344 /* WXK_F5 */,    4 /* wxMOD_SHIFT */ },
-	{ "SaveStateSlot6",      345 /* WXK_F6 */,    4 /* wxMOD_SHIFT */ },
-	{ "SaveStateSlot7",      346 /* WXK_F7 */,    4 /* wxMOD_SHIFT */ },
-	{ "SaveStateSlot8",      347 /* WXK_F8 */,    4 /* wxMOD_SHIFT */ },
-	{ "SaveStateSlot9",      0,                   0 /* wxMOD_NONE */ },
-	{ "SaveStateSlot10",     0,                   0 /* wxMOD_NONE */ },
+	{ "SaveStateSlot1",       true, false, 340 /* WXK_F1 */,    4 /* wxMOD_SHIFT */,   0, 0 },
+	{ "SaveStateSlot2",       true, false, 341 /* WXK_F2 */,    4 /* wxMOD_SHIFT */,   0, 0 },
+	{ "SaveStateSlot3",       true, false, 342 /* WXK_F3 */,    4 /* wxMOD_SHIFT */,   0, 0 },
+	{ "SaveStateSlot4",       true, false, 343 /* WXK_F4 */,    4 /* wxMOD_SHIFT */,   0, 0 },
+	{ "SaveStateSlot5",       true, false, 344 /* WXK_F5 */,    4 /* wxMOD_SHIFT */,   0, 0 },
+	{ "SaveStateSlot6",       true, false, 345 /* WXK_F6 */,    4 /* wxMOD_SHIFT */,   0, 0 },
+	{ "SaveStateSlot7",       true, false, 346 /* WXK_F7 */,    4 /* wxMOD_SHIFT */,   0, 0 },
+	{ "SaveStateSlot8",       true, false, 347 /* WXK_F8 */,    4 /* wxMOD_SHIFT */,   0, 0 },
+	{ "SaveStateSlot9",       true, false, 0,                   0 /* wxMOD_NONE */,    0, 0 },
+	{ "SaveStateSlot10",      true, false, 0,                   0 /* wxMOD_NONE */,    0, 0 },
 
-	{ "SelectStateSlot1",	0 ,	0  },
-	{ "SelectStateSlot2",	0 ,	0  },
-	{ "SelectStateSlot3",	0,	0  },
-	{ "SelectStateSlot4",	0 ,	0  },
-	{ "SelectStateSlot5",	0 ,	0  },
-	{ "SelectStateSlot6",	0 ,	0  },
-	{ "SelectStateSlot7",	0 ,	0  },
-	{ "SelectStateSlot8",	0 ,	0  },
-	{ "SelectStateSlot9",	0 ,	0  },
-	{ "SelectStateSlot10",	0 ,	0  },
-	{ "SaveSelectedSlot",	0 ,	0  },
-	{ "LoadSelectedSlot",	0 ,	0  },
+	{ "SelectStateSlot1",	  true, false, 0,                    0,                     0, 0 },
+	{ "SelectStateSlot2",	  true, false, 0,	                 0,                     0, 0 },
+	{ "SelectStateSlot3",	  true, false, 0,	                 0,                     0, 0 },
+	{ "SelectStateSlot4",	  true, false, 0,	                 0,                     0, 0 },
+	{ "SelectStateSlot5",	  true, false, 0,	                 0,                     0, 0 },
+	{ "SelectStateSlot6",	  true, false, 0,	                 0,                     0, 0 },
+	{ "SelectStateSlot7",	  true, false, 0,	                 0,                     0, 0 },
+	{ "SelectStateSlot8",	  true, false, 0,	                 0,                     0, 0 },
+	{ "SelectStateSlot9",	  true, false, 0,	                 0,                     0, 0 },
+	{ "SelectStateSlot10",	  true, false, 0,	                 0,                     0, 0 },
+	{ "SaveSelectedSlot",	  true, false, 0,	                 0,                     0, 0 },
+	{ "LoadSelectedSlot",	  true, false, 0,	                 0,                     0, 0 },
+	 
+	{ "LoadLastState1",       true, false, 0,                   0 /* wxMOD_NONE */,    0, 0 },
+	{ "LoadLastState2",       true, false, 0,                   0 /* wxMOD_NONE */,    0, 0 },
+	{ "LoadLastState3",       true, false, 0,                   0 /* wxMOD_NONE */,    0, 0 },
+	{ "LoadLastState4",       true, false, 0,                   0 /* wxMOD_NONE */,    0, 0 },
+	{ "LoadLastState5",       true, false, 0,                   0 /* wxMOD_NONE */,    0, 0 },
+	{ "LoadLastState6",       true, false, 0,                   0 /* wxMOD_NONE */,    0, 0 },
+	{ "LoadLastState7",       true, false, 0,                   0 /* wxMOD_NONE */,    0, 0 },
+	{ "LoadLastState8",       true, false, 0,                   0 /* wxMOD_NONE */,    0, 0 },
 
-	{ "LoadLastState1",      0,                   0 /* wxMOD_NONE */ },
-	{ "LoadLastState2",      0,                   0 /* wxMOD_NONE */ },
-	{ "LoadLastState3",      0,                   0 /* wxMOD_NONE */ },
-	{ "LoadLastState4",      0,                   0 /* wxMOD_NONE */ },
-	{ "LoadLastState5",      0,                   0 /* wxMOD_NONE */ },
-	{ "LoadLastState6",      0,                   0 /* wxMOD_NONE */ },
-	{ "LoadLastState7",      0,                   0 /* wxMOD_NONE */ },
-	{ "LoadLastState8",      0,                   0 /* wxMOD_NONE */ },
-
-	{ "SaveFirstState",      0,                   0 /* wxMOD_NONE */ },
-	{ "UndoLoadState",       351 /* WXK_F12 */,   0 /* wxMOD_NONE */ },
-	{ "UndoSaveState",       351 /* WXK_F12 */,   4 /* wxMOD_SHIFT */ },
-	{ "SaveStateFile",       0,                   0 /* wxMOD_NONE */ },
-	{ "LoadStateFile",       0,                   0 /* wxMOD_NONE */ },
+	{ "SaveFirstState",       true, false, 0,                   0 /* wxMOD_NONE */,    0, 0 },
+	{ "UndoLoadState",        true, false, 351 /* WXK_F12 */,   0 /* wxMOD_NONE */,    0, 0 },
+	{ "UndoSaveState",        true, false, 351 /* WXK_F12 */,   4 /* wxMOD_SHIFT */,   0, 0 },
+	{ "SaveStateFile",        true, false, 0,                   0 /* wxMOD_NONE */,    0, 0 },
+	{ "LoadStateFile",        true, false, 0,                   0 /* wxMOD_NONE */,    0, 0 },
 };
+
+static const struct
+{
+	const char* IniText;
+	const bool  KBM;
+	const bool  DInput;
+	const int   DefaultKey;
+	const int   DefaultModifier;
+	const u32   DandXInputMapping;
+	const u32   DInputMappingExtra;
+} g_VRData[] = {
+		{ "FreelookReset",              true, false, 82, 4 /* wxMOD_SHIFT */, 0, 0 },
+		{ "FreelookZoomIn",             true, false, 87, 4 /* wxMOD_SHIFT */, 0, 0 },
+		{ "FreelookZoomOut",            true, false, 83, 4 /* wxMOD_SHIFT */, 0, 0 },
+		{ "FreelookLeft",               true, false, 65, 4 /* wxMOD_SHIFT */, 0, 0 },
+		{ "FreelookRight",              true, false, 68, 4 /* wxMOD_SHIFT */, 0, 0 },
+		{ "FreelookUp",                 true, false, 69, 4 /* wxMOD_SHIFT */, 0, 0 },
+		{ "FreelookDown",               true, false, 81, 4 /* wxMOD_SHIFT */, 0, 0 },
+		{ "VRPermanentCameraForward",   true, false, 80, 4 /* wxMOD_SHIFT */, 0, 0 },
+		{ "VRPermanentCameraBackward",  true, false, 59, 4 /* wxMOD_SHIFT */, 0, 0 },
+		{ "VRLargerScale",              true, false, 61, 4 /* wxMOD_SHIFT */, 0, 0 },
+		{ "VRSmallerScale",	            true, false, 45, 4 /* wxMOD_SHIFT */, 0, 0 },
+		{ "VRGlobalLargerScale",        true, false,  0, 0 /* wxMOD_SHIFT */, 0, 0 },
+		{ "VRGlobalSmallerScale",       true, false,  0, 0 /* wxMOD_SHIFT */, 0, 0 },
+		{ "VRCameraTiltUp",             true, false, 79, 4 /* wxMOD_SHIFT */, 0, 0 },
+		{ "VRCameraTiltDown",           true, false, 76, 4 /* wxMOD_SHIFT */, 0, 0 },
+
+		{ "VRHUDForward",               true, false, 47, 4 /* wxMOD_SHIFT */, 0, 0 },
+		{ "VRHUDBackward",              true, false, 46, 4 /* wxMOD_SHIFT */, 0, 0 },
+		{ "VRHUDThicker",               true, false, 93, 4 /* wxMOD_SHIFT */, 0, 0 },
+		{ "VRHUDThinner",               true, false, 91, 4 /* wxMOD_SHIFT */, 0, 0 },
+		{ "VRHUD3DCloser",              true, false,  0, 0 /* wxMOD_NONE */, 0, 0 },
+		{ "VRHUD3DFurther",             true, false,  0, 0 /* wxMOD_NONE */, 0, 0 },
+
+		{ "VR2DScreenLarger",           true, false, 44, 4 /* wxMOD_SHIFT */, 0, 0 },
+		{ "VR2DScreenSmaller",          true, false, 77, 4 /* wxMOD_SHIFT */, 0, 0 },
+		{ "VR2DCameraForward",          true, false, 74, 4 /* wxMOD_SHIFT */, 0, 0 },
+		{ "VR2DCameraBackward",         true, false, 85, 4 /* wxMOD_SHIFT */, 0, 0 },
+		//{ "VR2DScreenLeft",             true, false, 0, 0 /* wxMOD_NONE */, 0, 0 }, //doesn't_exist_right_now?
+		//{ "VR2DScreenRight",            true, false, 0, 0 /* wxMOD_NONE */, 0, 0 }, //doesn't_exist_right_now?
+		{ "VR2DCameraUp",               true, false, 72, 4 /* wxMOD_SHIFT */, 0, 0 },
+		{ "VR2DCameraDown",             true, false, 89, 4 /* wxMOD_SHIFT */, 0, 0 },
+		{ "VR2DCameraTiltUp",           true, false, 73, 4 /* wxMOD_SHIFT */, 0, 0 },
+		{ "VR2DCameraTiltDown",         true, false, 75, 4 /* wxMOD_SHIFT */, 0, 0 },
+		{ "VR2DScreenThicker",          true, false, 84, 4 /* wxMOD_SHIFT */, 0, 0 },
+		{ "VR2DScreenThinner",          true, false, 71, 4 /* wxMOD_SHIFT */, 0, 0 },
+
+};
+
+GPUDeterminismMode ParseGPUDeterminismMode(const std::string& mode)
+{
+	if (mode == "auto")
+		return GPU_DETERMINISM_AUTO;
+	if (mode == "none")
+		return GPU_DETERMINISM_NONE;
+	if (mode == "fake-completion")
+		return GPU_DETERMINISM_FAKE_COMPLETION;
+
+	NOTICE_LOG(BOOT, "Unknown GPU determinism mode %s", mode.c_str());
+	return GPU_DETERMINISM_AUTO;
+}
 
 SConfig::SConfig()
 {
@@ -182,9 +247,20 @@ void SConfig::SaveSettings()
 	SaveDSPSettings(ini);
 	SaveInputSettings(ini);
 	SaveFifoPlayerSettings(ini);
+	SaveVRSettings(ini);
 
 	ini.Save(File::GetUserPath(F_DOLPHINCONFIG_IDX));
 	m_SYSCONF->Save();
+}
+
+void SConfig::SaveSingleSetting(std::string section_name, std::string setting_name, float value_to_save)
+{
+	IniFile iniFile;
+	iniFile.Load(File::GetUserPath(D_CONFIG_IDX) + "Dolphin.ini");
+
+	IniFile::Section* vr = iniFile.GetOrCreateSection(section_name);
+	vr->Set(setting_name, value_to_save);
+	iniFile.Save(File::GetUserPath(D_CONFIG_IDX) + "Dolphin.ini");
 }
 
 void SConfig::SaveGeneralSettings(IniFile& ini)
@@ -200,6 +276,13 @@ void SConfig::SaveGeneralSettings(IniFile& ini)
 	// Clear removed folders
 	int oldPaths;
 	int numPaths = (int)m_ISOFolder.size();
+	//general->Get("GCMPathes", &oldPaths, 0);
+	//for (int i = numPaths; i < oldPaths; i++)
+	//{
+	//	ini.DeleteKey("General", StringFromFormat("GCMPath%i", i));
+	//}
+	//ini.DeleteKey("General", "GCMPathes");
+
 	general->Get("ISOPaths", &oldPaths, 0);
 	for (int i = numPaths; i < oldPaths; i++)
 	{
@@ -247,11 +330,42 @@ void SConfig::SaveHotkeySettings(IniFile& ini)
 {
 	IniFile::Section* hotkeys = ini.GetOrCreateSection("Hotkeys");
 
+	hotkeys->Set("XInputPolling", m_LocalCoreStartupParameter.bHotkeysXInput);
+	hotkeys->Set("FreeLookSensitivity", m_LocalCoreStartupParameter.fFreeLookSensitivity);
+
 	for (int i = 0; i < NUM_HOTKEYS; i++)
 	{
 		hotkeys->Set(g_HKData[i].IniText, m_LocalCoreStartupParameter.iHotkey[i]);
 		hotkeys->Set(std::string(g_HKData[i].IniText) + "Modifier",
 			m_LocalCoreStartupParameter.iHotkeyModifier[i]);
+		hotkeys->Set(std::string(g_HKData[i].IniText) + "KBM",
+			m_LocalCoreStartupParameter.bHotkeyKBM[i]);
+		hotkeys->Set(std::string(g_HKData[i].IniText) + "DInput",
+			m_LocalCoreStartupParameter.bHotkeyDInput[i]);
+		hotkeys->Set(std::string(g_HKData[i].IniText) + "XInputMapping",
+			m_LocalCoreStartupParameter.iHotkeyDandXInputMapping[i]);
+		hotkeys->Set(std::string(g_HKData[i].IniText) + "DInputMappingExtra",
+			m_LocalCoreStartupParameter.iHotkeyDInputMappingExtra[i]);
+	}
+}
+
+void SConfig::SaveVRSettings(IniFile& ini)
+{
+	IniFile::Section* vrsettings = ini.GetOrCreateSection("Hotkeys");
+
+	for (int i = 0; i < NUM_VR_HOTKEYS; i++)
+	{
+		vrsettings->Set(g_VRData[i].IniText, m_LocalCoreStartupParameter.iVRSettings[i]);
+		vrsettings->Set(std::string(g_VRData[i].IniText) + "Modifier",
+			m_LocalCoreStartupParameter.iVRSettingsModifier[i]);
+		vrsettings->Set(std::string(g_VRData[i].IniText) + "KBM",
+			m_LocalCoreStartupParameter.bVRSettingsKBM[i]);
+		vrsettings->Set(std::string(g_VRData[i].IniText) + "DInput",
+			m_LocalCoreStartupParameter.bVRSettingsDInput[i]);
+		vrsettings->Set(std::string(g_VRData[i].IniText) + "XInputMapping",
+			m_LocalCoreStartupParameter.iVRSettingsDandXInputMapping[i]);
+		vrsettings->Set(std::string(g_VRData[i].IniText) + "DInputMappingExtra",
+			m_LocalCoreStartupParameter.iVRSettingsDInputMappingExtra[i]);
 	}
 }
 
@@ -259,18 +373,27 @@ void SConfig::SaveDisplaySettings(IniFile& ini)
 {
 	IniFile::Section* display = ini.GetOrCreateSection("Display");
 
-	display->Set("FullscreenResolution", m_LocalCoreStartupParameter.strFullscreenResolution);
+	if (!m_special_case)
+		display->Set("FullscreenResolution", m_LocalCoreStartupParameter.strFullscreenResolution);
 	display->Set("Fullscreen", m_LocalCoreStartupParameter.bFullscreen);
 	display->Set("RenderToMain", m_LocalCoreStartupParameter.bRenderToMain);
-	display->Set("RenderWindowXPos", m_LocalCoreStartupParameter.iRenderWindowXPos);
-	display->Set("RenderWindowYPos", m_LocalCoreStartupParameter.iRenderWindowYPos);
-	display->Set("RenderWindowWidth", m_LocalCoreStartupParameter.iRenderWindowWidth);
-	display->Set("RenderWindowHeight", m_LocalCoreStartupParameter.iRenderWindowHeight);
+	if (!m_special_case)
+	{
+		display->Set("RenderWindowXPos", m_LocalCoreStartupParameter.iRenderWindowXPos);
+		display->Set("RenderWindowYPos", m_LocalCoreStartupParameter.iRenderWindowYPos);
+		display->Set("RenderWindowWidth", m_LocalCoreStartupParameter.iRenderWindowWidth);
+		display->Set("RenderWindowHeight", m_LocalCoreStartupParameter.iRenderWindowHeight);
+	}
 	display->Set("RenderWindowAutoSize", m_LocalCoreStartupParameter.bRenderWindowAutoSize);
 	display->Set("KeepWindowOnTop", m_LocalCoreStartupParameter.bKeepWindowOnTop);
 	display->Set("ProgressiveScan", m_LocalCoreStartupParameter.bProgressive);
 	display->Set("DisableScreenSaver", m_LocalCoreStartupParameter.bDisableScreenSaver);
 	display->Set("ForceNTSCJ", m_LocalCoreStartupParameter.bForceNTSCJ);
+
+	IniFile::Section* vr = ini.GetOrCreateSection("VR");
+#ifdef OCULUSSDK042
+	vr->Set("AsynchronousTimewarp", m_LocalCoreStartupParameter.bAsynchronousTimewarp);
+#endif
 }
 
 void SConfig::SaveGameListSettings(IniFile& ini)
@@ -406,6 +529,7 @@ void SConfig::LoadSettings()
 	LoadDSPSettings(ini);
 	LoadInputSettings(ini);
 	LoadFifoPlayerSettings(ini);
+	LoadVRSettings(ini);
 
 	m_SYSCONF = new SysConf();
 }
@@ -434,7 +558,29 @@ void SConfig::LoadGeneralSettings(IniFile& ini)
 		}
 	}
 
+	if (general->Get("GCMPathes", &numISOPaths, 0))
+	{
+		for (int i = 0; i < numISOPaths; i++)
+		{
+			std::string tmpPath;
+			general->Get(StringFromFormat("GCMPath%i", i), &tmpPath, "");
+			bool found = false;
+			for (int j = 0; j < m_ISOFolder.size(); ++j)
+			{
+				if (m_ISOFolder[j] == tmpPath)
+				{
+					found = true;
+					break;
+				}
+			}
+			if (!found)
+				m_ISOFolder.push_back(std::move(tmpPath));
+		}
+	}
+
 	general->Get("RecursiveISOPaths", &m_RecursiveISOFolder, false);
+	if (!m_RecursiveISOFolder)
+		general->Get("RecursiveGCMPaths", &m_RecursiveISOFolder, false);
 
 	general->Get("NANDRootPath", &m_NANDPath);
 	m_NANDPath = File::GetUserPath(D_WIIROOT_IDX, m_NANDPath);
@@ -469,12 +615,45 @@ void SConfig::LoadHotkeySettings(IniFile& ini)
 {
 	IniFile::Section* hotkeys = ini.GetOrCreateSection("Hotkeys");
 
+	hotkeys->Get("XInputPolling", &m_LocalCoreStartupParameter.bHotkeysXInput, true);
+	hotkeys->Get("FreeLookSensitivity", &m_LocalCoreStartupParameter.fFreeLookSensitivity, 1.00);
+
 	for (int i = 0; i < NUM_HOTKEYS; i++)
 	{
 		hotkeys->Get(g_HKData[i].IniText,
 		    &m_LocalCoreStartupParameter.iHotkey[i], g_HKData[i].DefaultKey);
 		hotkeys->Get(std::string(g_HKData[i].IniText) + "Modifier",
 		    &m_LocalCoreStartupParameter.iHotkeyModifier[i], g_HKData[i].DefaultModifier);
+		hotkeys->Get(std::string(g_HKData[i].IniText) + "KBM",
+			&m_LocalCoreStartupParameter.bHotkeyKBM[i], g_HKData[i].KBM);
+		hotkeys->Get(std::string(g_HKData[i].IniText) + "DInput",
+			&m_LocalCoreStartupParameter.bHotkeyDInput[i], g_HKData[i].DInput);
+		hotkeys->Get(std::string(g_HKData[i].IniText) + "XInputMapping",
+			&m_LocalCoreStartupParameter.iHotkeyDandXInputMapping[i], g_HKData[i].DandXInputMapping);
+		hotkeys->Get(std::string(g_HKData[i].IniText) + "DInputMappingExtra",
+			&m_LocalCoreStartupParameter.iHotkeyDInputMappingExtra[i], g_HKData[i].DInputMappingExtra);
+	}
+}
+
+void SConfig::LoadVRSettings(IniFile& ini)
+{
+	IniFile::Section* vrsettings = ini.GetOrCreateSection("Hotkeys");
+
+
+	for (int i = 0; i < NUM_VR_HOTKEYS; i++)
+	{
+		vrsettings->Get(g_VRData[i].IniText,
+			&m_LocalCoreStartupParameter.iVRSettings[i], g_VRData[i].DefaultKey);
+		vrsettings->Get(std::string(g_VRData[i].IniText) + "Modifier",
+			&m_LocalCoreStartupParameter.iVRSettingsModifier[i], g_VRData[i].DefaultModifier);
+		vrsettings->Get(std::string(g_VRData[i].IniText) + "KBM",
+			&m_LocalCoreStartupParameter.bVRSettingsKBM[i], g_VRData[i].KBM);
+		vrsettings->Get(std::string(g_VRData[i].IniText) + "DInput",
+			&m_LocalCoreStartupParameter.bVRSettingsDInput[i], g_VRData[i].DInput);
+		vrsettings->Get(std::string(g_VRData[i].IniText) + "XInputMapping",
+			&m_LocalCoreStartupParameter.iVRSettingsDandXInputMapping[i], g_VRData[i].DandXInputMapping);
+		vrsettings->Get(std::string(g_VRData[i].IniText) + "DInputMappingExtra",
+			&m_LocalCoreStartupParameter.iVRSettingsDInputMappingExtra[i], g_VRData[i].DInputMappingExtra);
 	}
 }
 
@@ -494,6 +673,13 @@ void SConfig::LoadDisplaySettings(IniFile& ini)
 	display->Get("ProgressiveScan",      &m_LocalCoreStartupParameter.bProgressive,            false);
 	display->Get("DisableScreenSaver",   &m_LocalCoreStartupParameter.bDisableScreenSaver,     true);
 	display->Get("ForceNTSCJ",           &m_LocalCoreStartupParameter.bForceNTSCJ,             false);
+
+	IniFile::Section* vr = ini.GetOrCreateSection("VR");
+#ifdef OCULUSSDK042
+	vr->Get("AsynchronousTimewarp",      &m_LocalCoreStartupParameter.bAsynchronousTimewarp,   false);
+#else
+	m_LocalCoreStartupParameter.bAsynchronousTimewarp = false;
+#endif
 }
 
 void SConfig::LoadGameListSettings(IniFile& ini)
@@ -593,6 +779,7 @@ void SConfig::LoadCoreSettings(IniFile& ini)
 	core->Get("FrameSkip",                 &m_FrameSkip,                                   0);
 	core->Get("GFXBackend",                &m_LocalCoreStartupParameter.m_strVideoBackend, "");
 	core->Get("GPUDeterminismMode",        &m_LocalCoreStartupParameter.m_strGPUDeterminismMode, "auto");
+	m_LocalCoreStartupParameter.m_GPUDeterminismMode = ParseGPUDeterminismMode(m_LocalCoreStartupParameter.m_strGPUDeterminismMode);
 	core->Get("GameCubeAdapter",           &m_GameCubeAdapter,                             true);
 	core->Get("GameCubeAdapterThread",     &m_GameCubeAdapterThread,                       true);
 }

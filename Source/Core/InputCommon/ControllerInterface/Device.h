@@ -71,6 +71,11 @@ public:
 				return 0.0;
 		}
 
+		virtual u32 GetStates() const
+		{
+			return NULL;
+		}
+
 		Input* ToInput() override { return this; }
 	};
 
@@ -118,6 +123,8 @@ protected:
 		FullAnalogSurface(Input* low, Input* high)
 			: m_low(*low), m_high(*high)
 		{}
+
+		bool IsDetectable() override { return false; }
 
 		ControlState GetState() const override
 		{

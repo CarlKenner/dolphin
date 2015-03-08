@@ -112,6 +112,7 @@ public:
 	// Returns true if key exists in section
 	bool Exists(const std::string& sectionName, const std::string& key) const;
 
+
 	template<typename T> bool GetIfExists(const std::string& sectionName, const std::string& key, T value)
 	{
 		if (Exists(sectionName, key))

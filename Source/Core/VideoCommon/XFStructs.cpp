@@ -109,9 +109,9 @@ static void XFRegWritten(int transferSize, u32 baseAddress, DataReader src)
 		case XFMEM_SETVIEWPORT+4:
 		case XFMEM_SETVIEWPORT+5:
 			VertexManager::Flush();
+			GeometryShaderManager::SetViewportChanged();
 			VertexShaderManager::SetViewportChanged();
 			PixelShaderManager::SetViewportChanged();
-			GeometryShaderManager::SetViewportChanged();
 
 			nextAddress = XFMEM_SETVIEWPORT + 6;
 			break;
@@ -124,8 +124,8 @@ static void XFRegWritten(int transferSize, u32 baseAddress, DataReader src)
 		case XFMEM_SETPROJECTION+5:
 		case XFMEM_SETPROJECTION+6:
 			VertexManager::Flush();
-			VertexShaderManager::SetProjectionChanged();
 			GeometryShaderManager::SetProjectionChanged();
+			VertexShaderManager::SetProjectionChanged();
 
 			nextAddress = XFMEM_SETPROJECTION + 7;
 			break;

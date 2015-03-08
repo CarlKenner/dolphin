@@ -1,4 +1,4 @@
-// Copyright 2013 Dolphin Emulator Project
+// Copyright 2015 Dolphin Emulator Project
 // Licensed under GPLv2
 // Refer to the license.txt file included.
 
@@ -78,6 +78,7 @@ Make AA apply instantly during gameplay if possible
 #include "VideoCommon/VertexShaderManager.h"
 #include "VideoCommon/VideoConfig.h"
 #include "VideoCommon/VideoState.h"
+#include "VideoCommon/VR.h"
 
 namespace OGL
 {
@@ -174,14 +175,38 @@ bool VideoBackend::Initialize(void *window_handle)
 
 	InitInterface();
 	GLInterface->SetMode(GLInterfaceMode::MODE_DETECT);
-	if (!GLInterface->Create(window_handle))
+	if (window_handle)
+	{
+		if (!GLInterface->Create(window_handle))
 		return false;
+	}
+	else
+	{
+		if (!GLInterface->CreateOffscreen())
+			return false;
+	}
 
 	// Do our OSD callbacks
 	OSD::DoCallbacks(OSD::OSD_INIT);
 
 	s_BackendInitialized = true;
+	return true;
+}
 
+bool VideoBackend::InitializeOtherThread(void *window_handle, std::thread *video_thread)
+{
+	m_video_thread = video_thread;
+	g_vr_lock.lock();
+	if (window_handle)
+	{
+		if (!GLInterface->Create(window_handle))
+			return false;
+	}
+	else
+	{
+		if (!GLInterface->CreateOffscreen())
+			return false;
+	}
 	return true;
 }
 
@@ -189,7 +214,10 @@ bool VideoBackend::Initialize(void *window_handle)
 // Run from the graphics thread
 void VideoBackend::Video_Prepare()
 {
-	GLInterface->MakeCurrent();
+	if(g_ActiveConfig.bAsynchronousTimewarp)
+		GLInterface->MakeCurrentOffscreen();
+	else
+		GLInterface->MakeCurrent();
 
 	g_renderer = new Renderer;
 
@@ -212,9 +240,20 @@ void VideoBackend::Video_Prepare()
 	VertexLoaderManager::Init();
 	TextureConverter::Init();
 	BoundingBox::Init();
+	
+	//This call is needed to ensure all OpenGL calls finish before
+	//entering the GPU thread.  Without this, AMD Drivers crash on
+	//first pass through the OculusSDK when doing a glDrawElements
+	//in CAPI_GL_DistortionRenderer.cpp when using Asynchronous Timewarp
+	glFinish();
 
 	// Notify the core that the video backend is ready
 	Host_Message(WM_USER_CREATE);
+}
+
+void VideoBackend::Video_PrepareOtherThread()
+{
+	GLInterface->MakeCurrent();
 }
 
 void VideoBackend::Shutdown()
@@ -224,7 +263,17 @@ void VideoBackend::Shutdown()
 	// Do our OSD callbacks
 	OSD::DoCallbacks(OSD::OSD_SHUTDOWN);
 
+	if(g_ActiveConfig.bAsynchronousTimewarp)
+		GLInterface->ShutdownOffscreen();
+	else
+		GLInterface->Shutdown();
+}
+
+void VideoBackend::ShutdownOtherThread()
+{
 	GLInterface->Shutdown();
+	delete GLInterface;
+	GLInterface = nullptr;
 }
 
 void VideoBackend::Video_Cleanup()
@@ -254,8 +303,24 @@ void VideoBackend::Video_Cleanup()
 		OpcodeDecoder_Shutdown();
 		delete g_renderer;
 		g_renderer = nullptr;
-		GLInterface->ClearCurrent();
+		if(g_ActiveConfig.bAsynchronousTimewarp)
+			GLInterface->ClearCurrentOffscreen();
+		else
+			GLInterface->ClearCurrent();
+		SConfig::GetInstance().m_LocalCoreStartupParameter.done = true;
+		ShutdownVR();
 	}
+}
+
+void VideoBackend::Video_CleanupOtherThread()
+{
+	g_vr_lock.unlock();
+	GLInterface->ClearCurrent();
+}
+
+bool VideoBackend::Video_CanDoAsync()
+{
+	return g_has_rift;
 }
 
 }

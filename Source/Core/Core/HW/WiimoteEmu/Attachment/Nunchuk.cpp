@@ -1,7 +1,8 @@
-// Copyright 2013 Dolphin Emulator Project
+// Copyright 2014 Dolphin Emulator Project
 // Licensed under GPLv2
 // Refer to the license.txt file included.
 
+#include "Core/HW/WiimoteEmu/HydraTLayer.h"
 #include "Core/HW/WiimoteEmu/Attachment/Nunchuk.h"
 
 namespace WiimoteEmu
@@ -15,7 +16,7 @@ static const u8 nunchuk_button_bitmasks[] =
 	Nunchuk::BUTTON_Z,
 };
 
-Nunchuk::Nunchuk(WiimoteEmu::ExtensionReg& _reg) : Attachment(_trans("Nunchuk"), _reg)
+Nunchuk::Nunchuk(WiimoteEmu::ExtensionReg& _reg, int index) : Attachment(_trans("Nunchuk"), _reg), m_index(index)
 {
 	// buttons
 	groups.emplace_back(m_buttons = new Buttons("Buttons"));
@@ -72,10 +73,13 @@ void Nunchuk::GetState(u8* const data)
 			++ncdata->jy;
 	}
 
+	HydraTLayer::GetNunchuk(m_index, &ncdata->jx, &ncdata->jy, &ncdata->bt);
+
 	AccelData accel;
 
 	// tilt
 	EmulateTilt(&accel, m_tilt);
+	HydraTLayer::GetNunchukAcceleration(m_index, &accel);
 
 	// swing
 	EmulateSwing(&accel, m_swing);

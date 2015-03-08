@@ -9,6 +9,12 @@
 
 #include "Common/CommonTypes.h"
 
+inline float SignOf(float x)
+{
+	// VR 1 if x is positive, -1 if x is negative, or 0 if x is zero
+	return (float)((x > 0) - (x < 0));
+}
+
 namespace MathUtil
 {
 template<class T>
@@ -216,6 +222,8 @@ public:
 	static void RotateX(Matrix33 &mtx, float rad);
 	// set mtx to be a rotation matrix around the y axis
 	static void RotateY(Matrix33 &mtx, float rad);
+	// set mtx to be a rotation matrix around the z axis
+	static void RotateZ(Matrix33 &mtx, float rad);
 
 	// set result = a x b
 	static void Multiply(const Matrix33 &a, const Matrix33 &b, Matrix33 &result);
@@ -233,6 +241,7 @@ public:
 
 	static void Translate(Matrix44 &mtx, const float vec[3]);
 	static void Shear(Matrix44 &mtx, const float a, const float b = 0);
+	static void Scale(Matrix44 &mtx, const float vec[3]);
 
 	static void Multiply(const Matrix44 &a, const Matrix44 &b, Matrix44 &result);
 

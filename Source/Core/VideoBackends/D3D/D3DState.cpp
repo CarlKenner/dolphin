@@ -1,4 +1,4 @@
-// Copyright 2013 Dolphin Emulator Project
+// Copyright 2015 Dolphin Emulator Project
 // Licensed under GPLv2
 // Refer to the license.txt file included.
 
@@ -6,6 +6,8 @@
 
 #include "VideoBackends/D3D/D3DBase.h"
 #include "VideoBackends/D3D/D3DState.h"
+
+#include "VideoCommon/VertexShaderManager.h"
 
 namespace DX11
 {
@@ -409,7 +411,7 @@ ID3D11RasterizerState* StateCache::Get(RasterizerState state)
 
 	D3D11_RASTERIZER_DESC rastdc = CD3D11_RASTERIZER_DESC(D3D11_FILL_SOLID,
 		state.cull_mode,
-		false, 0, 0.f, 0, true, true, false, false);
+		false, 0, 0.f, 0, state.depth_clip_enable, true, false, false);
 
 	ID3D11RasterizerState* res = nullptr;
 
@@ -423,6 +425,10 @@ ID3D11RasterizerState* StateCache::Get(RasterizerState state)
 
 ID3D11DepthStencilState* StateCache::Get(ZMode state)
 {
+	// VR HUD always on Top option
+	if (VertexShaderManager::m_layer_on_top)
+		state.func = ZMode::ALWAYS;
+
 	auto it = m_depth.find(state.hex);
 
 	if (it != m_depth.end())

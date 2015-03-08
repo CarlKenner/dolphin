@@ -26,6 +26,9 @@
 #ifdef CIFACE_USE_ANDROID
 	#include "InputCommon/ControllerInterface/Android/Android.h"
 #endif
+#ifdef _WIN32
+	#include "InputCommon/ControllerInterface/Sixense/SixenseHack.h"
+#endif
 
 using namespace ciface::ExpressionParser;
 
@@ -68,6 +71,10 @@ void ControllerInterface::Initialize(void* const hwnd)
 #endif
 #ifdef CIFACE_USE_ANDROID
 	ciface::Android::Init(m_devices);
+#endif
+#ifdef _WIN32
+	// VR Sixense Razer Hydra or STEM
+	InitSixenseLib();
 #endif
 
 	m_is_init = true;
@@ -122,6 +129,15 @@ void ControllerInterface::Shutdown()
 #endif
 #ifdef CIFACE_USE_ANDROID
 	// nothing needed
+#endif
+#ifdef _WIN32
+	// VR Razer Hydra or Sixense STEM
+	if (g_sixense_initialized && Hydra_Exit)
+	{
+		NOTICE_LOG(WIIMOTE, "Sixense Razer Hydra driver shutting down.");
+		g_sixense_initialized = false;
+		Hydra_Exit();
+	}
 #endif
 
 	m_is_init = false;

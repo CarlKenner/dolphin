@@ -268,7 +268,7 @@ static inline void GeneratePixelShader(T& out, DSTALPHA_MODE dstAlphaMode, API_T
 	}
 
 	out.Write("struct VS_OUTPUT {\n");
-	GenerateVSOutputMembers<T>(out, ApiType);
+	GenerateVSOutputMembers<T>(out, ApiType, uid_data->genMode_numtexgens);
 	out.Write("};\n");
 
 	const bool forced_early_z = g_ActiveConfig.backend_info.bSupportsEarlyZ && bpmem.UseEarlyDepthTest()
@@ -329,7 +329,7 @@ static inline void GeneratePixelShader(T& out, DSTALPHA_MODE dstAlphaMode, API_T
 		if (g_ActiveConfig.backend_info.bSupportsGeometryShaders)
 		{
 			out.Write("in VertexData {\n");
-			GenerateVSOutputMembers<T>(out, ApiType, g_ActiveConfig.backend_info.bSupportsBindingLayout ? "centroid" : "centroid in");
+			GenerateVSOutputMembers<T>(out, ApiType, uid_data->genMode_numtexgens, g_ActiveConfig.backend_info.bSupportsBindingLayout ? "centroid" : "centroid in");
 
 			if (g_ActiveConfig.iStereoMode > 0)
 				out.Write("\tflat int layer;\n");
@@ -384,7 +384,7 @@ static inline void GeneratePixelShader(T& out, DSTALPHA_MODE dstAlphaMode, API_T
 			out.Write(",\n  in centroid float3 WorldPos : TEXCOORD%d", numTexgen + 2);
 		}
 		uid_data->stereo = g_ActiveConfig.iStereoMode > 0;
-		if (g_ActiveConfig.iStereoMode > 0)
+		if (uid_data->stereo)
 			out.Write(",\n  in uint layer : SV_RenderTargetArrayIndex\n");
 		out.Write("        ) {\n");
 	}

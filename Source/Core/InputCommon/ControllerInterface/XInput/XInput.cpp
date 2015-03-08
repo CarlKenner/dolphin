@@ -257,5 +257,10 @@ void Device::Motor::SetState(ControlState state)
 	m_parent->UpdateMotors();
 }
 
+u32 Device::Button::GetStates() const
+{
+	return (u32) m_buttons;
+}
+
 }
 }

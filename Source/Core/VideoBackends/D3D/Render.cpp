@@ -1,13 +1,15 @@
-// Copyright 2013 Dolphin Emulator Project
+// Copyright 2015 Dolphin Emulator Project
 // Licensed under GPLv2
 // Refer to the license.txt file included.
 
 #include <cinttypes>
 #include <cmath>
+#include <sstream>
 #include <string>
 #include <strsafe.h>
 #include <unordered_map>
 
+#include "Common/Atomic.h"
 #include "Common/Timer.h"
 
 #include "Core/ConfigManager.h"
@@ -25,6 +27,7 @@
 #include "VideoBackends/D3D/Television.h"
 #include "VideoBackends/D3D/TextureCache.h"
 #include "VideoBackends/D3D/VertexShaderCache.h"
+#include "VideoBackends/D3D/VRD3D.h"
 
 #include "VideoCommon/AVIDump.h"
 #include "VideoCommon/BPFunctions.h"
@@ -37,6 +40,9 @@
 #include "VideoCommon/Statistics.h"
 #include "VideoCommon/VertexShaderManager.h"
 #include "VideoCommon/VideoConfig.h"
+#include "VideoCommon/VR.h"
+
+static bool g_first_rift_frame = true;
 
 namespace DX11
 {
@@ -217,6 +223,7 @@ void Create3DVisionTexture(int width, int height)
 
 Renderer::Renderer(void *&window_handle)
 {
+	g_first_rift_frame = true;
 	D3D::Create((HWND)window_handle);
 
 	s_backbuffer_width = D3D::GetBackBufferWidth();
@@ -254,6 +261,7 @@ Renderer::Renderer(void *&window_handle)
 	gx_state.zmode.func = ZMode::NEVER;
 
 	gx_state.raster.cull_mode = D3D11_CULL_NONE;
+	gx_state.raster.depth_clip_enable = !g_ActiveConfig.bDisableNearClipping;
 
 	// Clear EFB textures
 	float ClearColor[4] = { 0.f, 0.f, 0.f, 1.f };
@@ -264,10 +272,21 @@ Renderer::Renderer(void *&window_handle)
 	D3D::context->RSSetViewports(1, &vp);
 	D3D::context->OMSetRenderTargets(1, &FramebufferManager::GetEFBColorTexture()->GetRTV(), FramebufferManager::GetEFBDepthTexture()->GetDSV());
 	D3D::BeginFrame();
+
+	// Action Replay culling code brute-forcing
+	// begin searching
+	if (Core::ch_bruteforce)
+		Core::ch_comenzar_busqueda = true;
 }
 
 Renderer::~Renderer()
 {
+	if (g_has_rift && !g_first_rift_frame && g_ActiveConfig.bEnableVR && !g_ActiveConfig.bAsynchronousTimewarp)
+	{
+		VR_PresentHMDFrame();
+	}
+	g_first_rift_frame = true;
+
 	TeardownDeviceObjects();
 	D3D::EndFrame();
 	D3D::Present();
@@ -312,8 +331,23 @@ bool Renderer::CheckForResize()
 
 void Renderer::SetScissorRect(const EFBRectangle& rc)
 {
-	TargetRectangle trc = ConvertEFBRectangle(rc);
-	D3D::context->RSSetScissorRects(1, trc.AsRECT());
+	TargetRectangle trc;
+	// In VR we use the whole EFB instead of just the bpmem.copyTexSrc rectangle passed to this function. 
+	if (g_has_hmd)
+	{
+		EFBRectangle sourceRc;
+		sourceRc.left = 0;
+		sourceRc.right = EFB_WIDTH - 1;
+		sourceRc.top = 0;
+		sourceRc.bottom = EFB_HEIGHT - 1;
+		trc = g_renderer->ConvertEFBRectangle(sourceRc);
+		D3D::context->RSSetScissorRects(1, trc.AsRECT());
+	}
+	else
+	{
+		trc = ConvertEFBRectangle(rc);
+		D3D::context->RSSetScissorRects(1, trc.AsRECT());
+	}
 }
 
 void Renderer::SetColorMask()
@@ -500,10 +534,11 @@ void Renderer::SetViewport()
 	int scissorXOff = bpmem.scissorOffset.x * 2;
 	int scissorYOff = bpmem.scissorOffset.y * 2;
 
-	float X = Renderer::EFBToScaledXf(xfmem.viewport.xOrig - xfmem.viewport.wd - scissorXOff);
-	float Y = Renderer::EFBToScaledYf(xfmem.viewport.yOrig + xfmem.viewport.ht - scissorYOff);
-	float Wd = Renderer::EFBToScaledXf(2.0f * xfmem.viewport.wd);
-	float Ht = Renderer::EFBToScaledYf(-2.0f * xfmem.viewport.ht);
+	float X, Y, Wd, Ht;
+	X = Renderer::EFBToScaledXf(xfmem.viewport.xOrig - xfmem.viewport.wd - scissorXOff);
+	Y = Renderer::EFBToScaledYf(xfmem.viewport.yOrig + xfmem.viewport.ht - scissorYOff);
+	Wd = Renderer::EFBToScaledXf(2.0f * xfmem.viewport.wd);
+	Ht = Renderer::EFBToScaledYf(-2.0f * xfmem.viewport.ht);
 	if (Wd < 0.0f)
 	{
 		X += Wd;
@@ -514,12 +549,25 @@ void Renderer::SetViewport()
 		Y += Ht;
 		Ht = -Ht;
 	}
+	g_requested_viewport = EFBRectangle((int)X, (int)Y, (int)Wd, (int)Ht);
+
+	if (g_viewport_type != VIEW_RENDER_TO_TEXTURE && g_has_hmd && g_ActiveConfig.bEnableVR)
+	{
+		// In VR we must use the entire EFB, not just the copyTexSrc area that is normally used.
+		// So scale from copyTexSrc to entire EFB, and we won't use copyTexSrc during rendering.
+		//X = (xfmem.viewport.xOrig - xfmem.viewport.wd - bpmem.copyTexSrcXY.x - (float)scissorXOff) * (float)GetTargetWidth() / (float)bpmem.copyTexSrcWH.x;
+		//Y = (xfmem.viewport.yOrig + xfmem.viewport.ht - bpmem.copyTexSrcXY.y - (float)scissorYOff) * (float)GetTargetHeight() / (float)bpmem.copyTexSrcWH.y;
+		//Wd = (2.0f * xfmem.viewport.wd) * (float)GetTargetWidth() / (float)bpmem.copyTexSrcWH.x;
+		//Ht = (-2.0f * xfmem.viewport.ht) * (float)GetTargetHeight() / (float)bpmem.copyTexSrcWH.y;
+		X = 0.0f; Y = 0.0f; Wd = (float)GetTargetWidth(); Ht = (float)GetTargetHeight();
+	}
 
 	// In D3D, the viewport rectangle must fit within the render target.
 	X = (X >= 0.f) ? X : 0.f;
 	Y = (Y >= 0.f) ? Y : 0.f;
 	Wd = (X + Wd <= GetTargetWidth()) ? Wd : (GetTargetWidth() - X);
 	Ht = (Y + Ht <= GetTargetHeight()) ? Ht : (GetTargetHeight() - Y);
+	g_rendered_viewport = EFBRectangle((int)X, (int)Y, (int)Wd, (int)Ht);
 
 	D3D11_VIEWPORT vp = CD3D11_VIEWPORT(X, Y, Wd, Ht,
 		std::max(0.0f, std::min(1.0f, (xfmem.viewport.farZ - xfmem.viewport.zRange) / 16777216.0f)),
@@ -549,6 +597,33 @@ void Renderer::ClearScreen(const EFBRectangle& rc, bool colorEnable, bool alphaE
 	// Color is passed in bgra mode so we need to convert it to rgba
 	u32 rgbaColor = (color & 0xFF00FF00) | ((color >> 16) & 0xFF) | ((color << 16) & 0xFF0000);
 	D3D::drawClearQuad(rgbaColor, (z & 0xFFFFFF) / float(0xFFFFFF));
+
+	D3D::stateman->PopDepthState();
+	D3D::stateman->PopBlendState();
+
+	RestoreAPIState();
+}
+
+void Renderer::SkipClearScreen(bool colorEnable, bool alphaEnable, bool zEnable)
+{
+	ResetAPIState();
+
+	if (colorEnable && alphaEnable) D3D::stateman->PushBlendState(clearblendstates[0]);
+	else if (colorEnable) D3D::stateman->PushBlendState(clearblendstates[1]);
+	else if (alphaEnable) D3D::stateman->PushBlendState(clearblendstates[2]);
+	else D3D::stateman->PushBlendState(clearblendstates[3]);
+
+	// TODO: Should we enable Z testing here?
+	/*if (!bpmem.zmode.testenable) D3D::stateman->PushDepthState(cleardepthstates[0]);
+	else */if (zEnable) D3D::stateman->PushDepthState(cleardepthstates[1]);
+	else /*if (!zEnable)*/ D3D::stateman->PushDepthState(cleardepthstates[2]);
+
+	//To Do: Not needed?
+	//D3D::context->VSSetShader(VertexShaderCache::GetClearVertexShader(), nullptr, 0);
+	//D3D::context->PSSetShader(PixelShaderCache::GetClearProgram(), nullptr, 0);
+	//D3D::context->IASetInputLayout(VertexShaderCache::GetClearInputLayout());
+
+	D3D::stateman->Apply();
 
 	D3D::stateman->PopDepthState();
 	D3D::stateman->PopBlendState();
@@ -683,9 +758,35 @@ void formatBufferDump(const u8* in, u8* out, int w, int h, int p)
 	}
 }
 
+void Renderer::AsyncTimewarpDraw()
+{
+#ifdef HAVE_OCULUSSDK
+	//TODO: D3D11 Asynchronous Timewarp
+#endif
+}
+
 // This function has the final picture. We adjust the aspect ratio here.
 void Renderer::SwapImpl(u32 xfbAddr, u32 fbWidth, u32 fbStride, u32 fbHeight, const EFBRectangle& rc, float Gamma)
 {
+	//rafa
+	if (Core::ch_bruteforce)
+		Core::ch_cacheo_pasado = true;
+
+	// VR - before the first frame we need BeginFrame, and we need to configure the tracking
+	if (g_first_rift_frame && g_has_rift && g_ActiveConfig.bEnableVR)
+	{
+		if (!g_ActiveConfig.bAsynchronousTimewarp)
+		{
+			VR_BeginFrame();
+			VR_GetEyePoses();
+		}
+		g_first_rift_frame = false;
+
+		VR_ConfigureHMDTracking();
+	}
+
+	// With frame skipping (or if the GC/Wii didn't draw anything), return without drawing anything
+	// but if we are recording an .avi file, save the frame to disk again to maintain the right frame rate.
 	if (g_bSkipCurrentFrame || (!XFBWrited && !g_ActiveConfig.RealXFBEnabled()) || !fbWidth || !fbHeight)
 	{
 		if (SConfig::GetInstance().m_DumpFrames && !frame_data.empty())
@@ -695,6 +796,8 @@ void Renderer::SwapImpl(u32 xfbAddr, u32 fbWidth, u32 fbStride, u32 fbHeight, co
 		return;
 	}
 
+	// Check what XFB we are supposed to draw
+	// If we are using virtual XFB, but there is no XFB, then count it as an empty frame and exit
 	u32 xfbCount = 0;
 	const XFBSourceBase* const* xfbSourceList = FramebufferManager::GetXFBSource(xfbAddr, fbStride, fbHeight, &xfbCount);
 	if ((!xfbSourceList || xfbCount == 0) && g_ActiveConfig.bUseXFB && !g_ActiveConfig.bUseRealXFB)
@@ -712,6 +815,7 @@ void Renderer::SwapImpl(u32 xfbAddr, u32 fbWidth, u32 fbStride, u32 fbHeight, co
 	UpdateDrawRectangle(s_backbuffer_width, s_backbuffer_height);
 	TargetRectangle targetRc = GetTargetRectangle();
 
+	// TODO: Do we still need to set and clear the backbuffer like this in VR mode with the Oculus Rift?
 	D3D::context->OMSetRenderTargets(1, &D3D::GetBackBuffer()->GetRTV(), nullptr);
 
 	float ClearColor[4] = { 0.f, 0.f, 0.f, 1.f };
@@ -728,6 +832,142 @@ void Renderer::SwapImpl(u32 xfbAddr, u32 fbWidth, u32 fbStride, u32 fbHeight, co
 
 		s_television.Submit(xfbAddr, fbStride, fbWidth, fbHeight);
 		s_television.Render();
+	}
+	else if (g_has_rift && g_ActiveConfig.bEnableVR)
+	{
+		// Draw our Razer Hydra
+		if (!g_ActiveConfig.bUseXFB)
+			DX11::s_avatarDrawer.Draw();
+
+		EFBRectangle sourceRc;
+		// In VR we use the whole EFB instead of just the bpmem.copyTexSrc rectangle passed to this function. 
+		sourceRc.left = 0;
+		sourceRc.right = EFB_WIDTH;
+		sourceRc.top = 0;
+		sourceRc.bottom = EFB_HEIGHT;
+		TargetRectangle targetRc = ConvertEFBRectangle(sourceRc);
+
+		if (g_ActiveConfig.bUseXFB)
+		{
+			const XFBSource* xfbSource;
+
+			// draw each xfb source
+			for (u32 i = 0; i < xfbCount; ++i)
+			{
+				xfbSource = (const XFBSource*)xfbSourceList[i];
+
+				TargetRectangle drawRc;
+
+				// use virtual xfb with offset
+				int xfbHeight = xfbSource->srcHeight;
+				int xfbWidth = xfbSource->srcWidth;
+				int hOffset = ((s32)xfbSource->srcAddr - (s32)xfbAddr) / ((s32)fbStride * 2);
+
+				drawRc.top = targetRc.top + hOffset * targetRc.GetHeight() / (s32)fbHeight;
+				drawRc.bottom = targetRc.top + (hOffset + xfbHeight) * targetRc.GetHeight() / (s32)fbHeight;
+				drawRc.left = targetRc.left + (targetRc.GetWidth() - xfbWidth * targetRc.GetWidth() / (s32)fbStride) / 2;
+				drawRc.right = targetRc.left + (targetRc.GetWidth() + xfbWidth * targetRc.GetWidth() / (s32)fbStride) / 2;
+
+				TargetRectangle sourceRc;
+				sourceRc.left = 0;
+				sourceRc.top = 0;
+				sourceRc.right = (int)xfbSource->texWidth;
+				sourceRc.bottom = (int)xfbSource->texHeight;
+
+				sourceRc.right -= Renderer::EFBToScaledX(fbStride - fbWidth);
+
+				D3DTexture2D* read_texture = xfbSource->tex;
+
+				D3D11_VIEWPORT Vp = CD3D11_VIEWPORT((float)drawRc.left, (float)drawRc.top, (float)drawRc.GetWidth(), (float)drawRc.GetHeight());
+
+				// Render to left eye
+				D3D::context->OMSetRenderTargets(1, &FramebufferManager::m_efb.m_frontBuffer[0]->GetRTV(), nullptr);
+				D3D::context->RSSetViewports(1, &Vp);
+				D3D::drawShadedTexQuad(read_texture->GetSRV(), sourceRc.AsRECT(), xfbSource->texWidth, xfbSource->texHeight, PixelShaderCache::GetColorCopyProgram(false), VertexShaderCache::GetSimpleVertexShader(), VertexShaderCache::GetSimpleInputLayout(), nullptr, Gamma, 0);
+
+				// Render to right eye
+				D3D::context->OMSetRenderTargets(1, &FramebufferManager::m_efb.m_frontBuffer[1]->GetRTV(), nullptr);
+				D3D::drawShadedTexQuad(read_texture->GetSRV(), sourceRc.AsRECT(), xfbSource->texWidth, xfbSource->texHeight, PixelShaderCache::GetColorCopyProgram(false), VertexShaderCache::GetSimpleVertexShader(), VertexShaderCache::GetSimpleInputLayout(), nullptr, Gamma, 1);
+			}
+		}
+		else
+		{
+			// TODO: Improve sampling algorithm for the pixel shader so that we can use the multisampled EFB texture as source
+			D3DTexture2D* read_texture = FramebufferManager::GetResolvedEFBColorTexture();
+
+			D3D11_VIEWPORT Vp = CD3D11_VIEWPORT((float)0, (float)0, (float)Renderer::GetTargetWidth(), (float)Renderer::GetTargetHeight());
+
+			// Render to left eye
+			D3D::context->OMSetRenderTargets(1, &FramebufferManager::m_efb.m_frontBuffer[0]->GetRTV(), nullptr);
+			D3D::context->RSSetViewports(1, &Vp);
+			D3D::drawShadedTexQuad(read_texture->GetSRV(), targetRc.AsRECT(), Renderer::GetTargetWidth(), Renderer::GetTargetHeight(), PixelShaderCache::GetColorCopyProgram(false), VertexShaderCache::GetSimpleVertexShader(), VertexShaderCache::GetSimpleInputLayout(), nullptr, Gamma, 0);
+
+			// Render to right eye
+			D3D::context->OMSetRenderTargets(1, &FramebufferManager::m_efb.m_frontBuffer[1]->GetRTV(), nullptr);
+			D3D::drawShadedTexQuad(read_texture->GetSRV(), targetRc.AsRECT(), Renderer::GetTargetWidth(), Renderer::GetTargetHeight(), PixelShaderCache::GetColorCopyProgram(false), VertexShaderCache::GetSimpleVertexShader(), VertexShaderCache::GetSimpleInputLayout(), nullptr, Gamma, 1);
+		}
+		// Reset viewport for drawing text
+		D3D11_VIEWPORT vp = CD3D11_VIEWPORT(400.0f, 400.0f, Renderer::GetTargetWidth() - 400.0f, Renderer::GetTargetHeight() - 400.0f);
+		D3D::context->RSSetViewports(1, &vp);
+		Renderer::DrawDebugText();
+		OSD::DrawMessages();
+
+		if (!g_ActiveConfig.bAsynchronousTimewarp)
+		{
+			VR_PresentHMDFrame();
+			Common::AtomicIncrement(g_drawn_vr);
+
+			// VR Synchronous Timewarp
+			static int real_frame_count_for_timewarp = 0;
+
+			if (g_ActiveConfig.bPullUp20fpsTimewarp)
+			{
+				if (real_frame_count_for_timewarp % 4 == 1)
+				{
+					g_ActiveConfig.iExtraFrames = 2;
+				}
+				else
+				{
+					g_ActiveConfig.iExtraFrames = 3;
+				}
+			}
+			else if (g_ActiveConfig.bPullUp30fpsTimewarp)
+			{
+				if (real_frame_count_for_timewarp % 2 == 1)
+				{
+					g_ActiveConfig.iExtraFrames = 1;
+				}
+				else
+				{
+					g_ActiveConfig.iExtraFrames = 2;
+				}
+			}
+			else if (g_ActiveConfig.bPullUp60fpsTimewarp)
+			{
+				if (real_frame_count_for_timewarp % 4 == 0)
+					g_ActiveConfig.iExtraFrames = 1;
+				else
+					g_ActiveConfig.iExtraFrames = 0;
+			}
+			else if (g_ActiveConfig.bPullUp20fps || g_ActiveConfig.bPullUp30fps || g_ActiveConfig.bPullUp60fps)
+			{
+				g_ActiveConfig.iExtraFrames = 0;
+			}
+
+			++real_frame_count_for_timewarp;
+
+			// If 30fps loop once, if 20fps (Zelda: OoT for instance) loop twice.
+			for (int i = 0; i < (int)g_ActiveConfig.iExtraFrames; ++i)
+			{
+				VR_DrawTimewarpFrame();
+				Common::AtomicIncrement(g_drawn_vr);
+			}
+
+		}
+		else
+		{
+			// VR TODO - Direct3D Asynchronous timewarp
+		}
 	}
 	else if (g_ActiveConfig.bUseXFB)
 	{
@@ -780,7 +1020,26 @@ void Renderer::SwapImpl(u32 xfbAddr, u32 fbWidth, u32 fbStride, u32 fbHeight, co
 	}
 
 	// done with drawing the game stuff, good moment to save a screenshot
-	if (s_bScreenshot)
+	if (Core::ch_bruteforce && Core::ch_tomarFoto > 0)
+	{								 
+		std::string s_sAux = std::to_string(Core::ch_codigoactual) + "," + Core::ch_map[Core::ch_codigoactual] +
+			"," + Core::ch_code + "," + std::to_string(stats.thisFrame.numPrims) + "," + std::to_string(stats.thisFrame.numDrawCalls) + "," + std::to_string(Core::ch_tomarFoto);
+		std::ofstream myfile;
+		myfile.open(File::GetUserPath(D_SCREENSHOTS_IDX) + Core::ch_title_id + "/bruteforce.csv" , std::ios_base::app);
+		myfile << s_sAux << "\n";
+		myfile.close();
+		if (Core::ch_tomarFoto == 1){
+			s_bScreenshot = true;
+			s_sScreenshotName = File::GetUserPath(D_SCREENSHOTS_IDX) + Core::ch_title_id + "/" + std::to_string(Core::ch_codigoactual) + "_" + Core::ch_map[Core::ch_codigoactual] + "_" + Core::ch_code + ".png";
+			Core::ch_cicles_without_snapshot = 0;
+			Core::ch_cacheo_pasado = true;
+			Core::ch_next_code = true; 
+		}
+		
+		Core::ch_tomarFoto -= 1;
+	}	
+
+	if (s_bScreenshot && !g_ActiveConfig.bAsynchronousTimewarp)
 	{
 		SaveScreenshot(s_sScreenshotName, GetTargetRectangle());
 		s_bScreenshot = false;
@@ -788,7 +1047,7 @@ void Renderer::SwapImpl(u32 xfbAddr, u32 fbWidth, u32 fbStride, u32 fbHeight, co
 
 	// Dump frames
 	static int w = 0, h = 0;
-	if (SConfig::GetInstance().m_DumpFrames)
+	if (SConfig::GetInstance().m_DumpFrames && !g_ActiveConfig.bAsynchronousTimewarp)
 	{
 		static int s_recordWidth;
 		static int s_recordHeight;
@@ -846,25 +1105,72 @@ void Renderer::SwapImpl(u32 xfbAddr, u32 fbWidth, u32 fbStride, u32 fbHeight, co
 		bLastFrameDumped = false;
 	}
 
-	// Reset viewport for drawing text
-	D3D11_VIEWPORT vp = CD3D11_VIEWPORT(0.0f, 0.0f, (float)GetBackbufferWidth(), (float)GetBackbufferHeight());
-	D3D::context->RSSetViewports(1, &vp);
+	if (!g_has_rift)
+	{
+		// Reset viewport for drawing text
+		D3D11_VIEWPORT vp = CD3D11_VIEWPORT(0.0f, 0.0f, (float)GetBackbufferWidth(), (float)GetBackbufferHeight());
+		D3D::context->RSSetViewports(1, &vp);
 
-	Renderer::DrawDebugText();
+		Renderer::DrawDebugText();
 
-	OSD::DrawMessages();
+		OSD::DrawMessages();
+	}
 	D3D::EndFrame();
 
 	TextureCache::Cleanup(frameCount);
 
+	if (g_has_hmd)
+	{
+		if (g_Config.bLowPersistence != g_ActiveConfig.bLowPersistence ||
+			g_Config.bDynamicPrediction != g_ActiveConfig.bDynamicPrediction ||
+			g_Config.bNoMirrorToWindow != g_ActiveConfig.bNoMirrorToWindow)
+		{
+			VR_ConfigureHMDPrediction();
+		}
+
+		if (g_Config.bOrientationTracking != g_ActiveConfig.bOrientationTracking ||
+			g_Config.bMagYawCorrection != g_ActiveConfig.bMagYawCorrection ||
+			g_Config.bPositionTracking != g_ActiveConfig.bPositionTracking)
+		{
+			VR_ConfigureHMDTracking();
+		}
+
+		if (g_Config.bChromatic != g_ActiveConfig.bChromatic ||
+			g_Config.bTimewarp != g_ActiveConfig.bTimewarp ||
+			g_Config.bVignette != g_ActiveConfig.bVignette ||
+			g_Config.bNoRestore != g_ActiveConfig.bNoRestore ||
+			g_Config.bFlipVertical != g_ActiveConfig.bFlipVertical ||
+			g_Config.bSRGB != g_ActiveConfig.bSRGB ||
+			g_Config.bOverdrive != g_ActiveConfig.bOverdrive ||
+			g_Config.bHqDistortion != g_ActiveConfig.bHqDistortion ||
+			g_fov_changed)
+		{
+			VR_ConfigureHMD();
+		}
+	}
+
+	// VR layer debugging, sometimes layers need to flash.
+	g_Config.iFlashState++;
+	if (g_Config.iFlashState >= 10)
+		g_Config.iFlashState = 0;
+
 	// Enable configuration changes
 	UpdateActiveConfig();
+	// VR Real XFB isn't implemented yet, so always disable it for VR
+	if (g_has_hmd && g_ActiveConfig.bEnableVR)
+	{
+		g_ActiveConfig.bUseRealXFB = false;
+		// always stretch to fit
+		g_ActiveConfig.iAspectRatio = 3;
+	}
 	TextureCache::OnConfigChanged(g_ActiveConfig);
+	if (g_has_hmd && g_ActiveConfig.bEnableVR && !g_ActiveConfig.bAsynchronousTimewarp)
+		VR_BeginFrame();
 
 	SetWindowSize(fbStride, fbHeight);
 
-	const bool windowResized = CheckForResize();
-	const bool fullscreen = g_ActiveConfig.bFullscreen && !g_ActiveConfig.bBorderlessFullscreen &&
+	bool windowResized = CheckForResize();
+	bool fullscreen = g_ActiveConfig.bFullscreen && g_ActiveConfig.ExclusiveFullscreenEnabled() &&
 		!SConfig::GetInstance().m_LocalCoreStartupParameter.bRenderToMain;
 
 	bool xfbchanged = s_last_xfb_mode != g_ActiveConfig.bUseRealXFB;
@@ -879,11 +1185,18 @@ void Renderer::SwapImpl(u32 xfbAddr, u32 fbWidth, u32 fbStride, u32 fbHeight, co
 	}
 
 	// Flip/present backbuffer to frontbuffer here
-	D3D::Present();
+	if (!g_has_rift)
+		D3D::Present();
 
 	// Check exclusive fullscreen state
 	bool exclusive_mode, fullscreen_changed = false;
-	if (SUCCEEDED(D3D::GetFullscreenState(&exclusive_mode)))
+	if (g_is_direct_mode)
+	{
+		windowResized = false;
+		fullscreen = false;
+		fullscreen_changed = false;
+	}
+	else if (SUCCEEDED(D3D::GetFullscreenState(&exclusive_mode)))
 	{
 		if (fullscreen && !exclusive_mode)
 		{
@@ -904,6 +1217,8 @@ void Renderer::SwapImpl(u32 xfbAddr, u32 fbWidth, u32 fbStride, u32 fbHeight, co
 			fullscreen_changed = true;
 		}
 	}
+
+	NewVRFrame();
 
 	// Resize the back buffers NOW to avoid flickering
 	if (xfbchanged ||
@@ -952,8 +1267,26 @@ void Renderer::SwapImpl(u32 xfbAddr, u32 fbWidth, u32 fbStride, u32 fbHeight, co
 
 		D3D::context->OMSetRenderTargets(1, &D3D::GetBackBuffer()->GetRTV(), nullptr);
 
+		if (g_ActiveConfig.bAsynchronousTimewarp)
+			g_vr_lock.lock();
 		delete g_framebuffer_manager;
 		g_framebuffer_manager = new FramebufferManager;
+		float clear_col[4] = { 0.f, 0.f, 0.f, 1.f };
+		D3D::context->ClearRenderTargetView(FramebufferManager::GetEFBColorTexture()->GetRTV(), clear_col);
+		D3D::context->ClearDepthStencilView(FramebufferManager::GetEFBDepthTexture()->GetDSV(), D3D11_CLEAR_DEPTH, 1.f, 0);
+		if (g_ActiveConfig.bAsynchronousTimewarp)
+			g_vr_lock.unlock();
+	}
+	else if (g_has_hmd && !g_ActiveConfig.bDontClearScreen)
+	{
+		// cegli - clearing the screen here causes flickering in games that fake 60fps by only actually updating
+		// the entire screen once every 2 frames.  They rely on the fact that nothing is cleared on the fake frame.
+		// An example of this is Beyond Good and Evil. Removing it aligns D3D with OGL, but adds the same smearing
+		// problem OGL has in the BG&E menu.  Without clearing the screen, some games like PM: TTYD have smearing
+		// around the edges.  How does OGL handle this gracefully?
+		// To Do: Figure out the best thing to do here.
+
+		// VR Clear screen before every frame
 		float clear_col[4] = { 0.f, 0.f, 0.f, 1.f };
 		D3D::context->ClearRenderTargetView(FramebufferManager::GetEFBColorTexture()->GetRTV(), clear_col);
 		D3D::context->ClearDepthStencilView(FramebufferManager::GetEFBDepthTexture()->GetDSV(), D3D11_CLEAR_DEPTH, 1.f, 0);
@@ -982,6 +1315,7 @@ void Renderer::RestoreAPIState()
 	D3D::stateman->PopRasterizerState();
 	SetViewport();
 	BPFunctions::SetScissor();
+	gx_state.raster.depth_clip_enable = !g_ActiveConfig.bDisableNearClipping;
 }
 
 void Renderer::ApplyState(bool bUseDstAlpha)

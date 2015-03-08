@@ -20,6 +20,7 @@ struct geometry_shader_uid_data
 	u32 pixel_lighting : 1;
 	u32 primitive_type : 2;
 	u32 wireframe : 1;
+	u32 vr : 1;
 };
 
 #pragma pack()
@@ -27,4 +28,5 @@ struct geometry_shader_uid_data
 typedef ShaderUid<geometry_shader_uid_data> GeometryShaderUid;
 
 void GenerateGeometryShaderCode(ShaderCode& object, u32 primitive_type, API_TYPE ApiType);
+void GenerateAvatarGeometryShaderCode(ShaderCode& object, u32 primitive_type, API_TYPE ApiType); 
 void GetGeometryShaderUid(GeometryShaderUid& object, u32 primitive_type, API_TYPE ApiType);

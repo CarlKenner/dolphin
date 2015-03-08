@@ -1,4 +1,4 @@
-// Copyright 2013 Dolphin Emulator Project
+// Copyright 2015 Dolphin Emulator Project
 // Licensed under GPLv2
 // Refer to the license.txt file included.
 
@@ -7,8 +7,10 @@
 #include "VideoBackends/OGL/GLUtil.h"
 #include "VideoBackends/OGL/ProgramShaderCache.h"
 #include "VideoBackends/OGL/Render.h"
+#include "VideoBackends/OGL/VROGL.h"
 
 #include "VideoCommon/FramebufferManagerBase.h"
+#include "VideoCommon/VR.h"
 
 // On the GameCube, the game sends a request for the graphics processor to
 // transfer its internal EFB (Embedded Framebuffer) to an area in GameCube RAM
@@ -90,6 +92,13 @@ public:
 	// Convert EFB content on pixel format change.
 	// convtype=0 -> rgb8->rgba6, convtype=2 -> rgba6->rgb8
 	static void ReinterpretPixelData(unsigned int convtype);
+
+	static void SwapAsyncFrontBuffers();
+
+	static GLuint m_eyeFramebuffer[2];
+	static GLuint m_frontBuffer[2];
+	static bool m_stereo3d;
+	static int m_eye_count;
 
 private:
 	XFBSourceBase* CreateXFBSource(unsigned int target_width, unsigned int target_height, unsigned int layers) override;

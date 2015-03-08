@@ -135,9 +135,9 @@ void SHADER::Bind()
 	}
 }
 
-void ProgramShaderCache::UploadConstants()
+void ProgramShaderCache::UploadConstants(bool force_upload)
 {
-	if (PixelShaderManager::dirty || VertexShaderManager::dirty || GeometryShaderManager::dirty)
+	if (PixelShaderManager::dirty || VertexShaderManager::dirty || GeometryShaderManager::dirty || force_upload)
 	{
 		auto buffer = s_buffer->Map(s_ubo_buffer_size, s_ubo_align);
 

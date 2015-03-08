@@ -62,9 +62,12 @@ IPC_HLE_PERIOD: For the Wiimote this is the call schedule:
 #include "Core/PowerPC/PowerPC.h"
 
 #include "InputCommon/ControllerInterface/ControllerInterface.h"
+#include "InputCommon/HotkeysXInput.h"
 
 #include "VideoCommon/CommandProcessor.h"
 #include "VideoCommon/VideoBackendBase.h"
+#include "VideoCommon/VideoConfig.h"
+#include "VideoCommon/VR.h"
 
 
 namespace SystemTimers
@@ -75,6 +78,7 @@ static u32 CPU_CORE_CLOCK  = 486000000u;             // 486 mhz (its not 485, st
 static int et_Dec;
 static int et_VI;
 static int et_SI;
+static int et_HotkeysXInput;
 static int et_CP;
 static int et_AudioDMA;
 static int et_DSP;
@@ -115,7 +119,14 @@ static void DSPCallback(u64 userdata, int cyclesLate)
 static void AudioDMACallback(u64 userdata, int cyclesLate)
 {
 	int fields = VideoInterface::GetNumFields();
-	int period = CPU_CORE_CLOCK / (AudioInterface::GetAIDSampleRate() * 4 / 32 * fields);
+	int period;
+	// VR requires a head-tracking rate greater than 60fps per second. This is solved by 
+	// running the game at 100%, but the head-tracking frame rate at 125%. To bring the audio 
+	// back to 100% speed, it must be slowed down by 25%
+	if (g_has_hmd &&  !SConfig::GetInstance().m_LocalCoreStartupParameter.bSyncGPU && SConfig::GetInstance().m_LocalCoreStartupParameter.m_GPUDeterminismMode != GPU_DETERMINISM_FAKE_COMPLETION && (g_ActiveConfig.bPullUp20fps || g_ActiveConfig.bPullUp30fps || g_ActiveConfig.bPullUp60fps || g_ActiveConfig.bPullUp20fpsTimewarp || g_ActiveConfig.bPullUp30fpsTimewarp || g_ActiveConfig.bPullUp60fpsTimewarp))
+		period = CPU_CORE_CLOCK / (AudioInterface::GetAIDSampleRate() * 4 / 40 * fields);
+	else
+		period = CPU_CORE_CLOCK / (AudioInterface::GetAIDSampleRate() * 4 / 32 * fields);
 	DSP::UpdateAudioDMA();  // Push audio to speakers.
 	CoreTiming::ScheduleEvent(period - cyclesLate, et_AudioDMA);
 }
@@ -147,6 +158,13 @@ static void SICallback(u64 userdata, int cyclesLate)
 {
 	SerialInterface::UpdateDevices();
 	CoreTiming::ScheduleEvent(SerialInterface::GetTicksToNextSIPoll() - cyclesLate, et_SI);
+}
+
+static void HotkeysXInputCallback(u64 userdata, int cyclesLate)
+{
+	if (SConfig::GetInstance().m_LocalCoreStartupParameter.bHotkeysXInput)
+		HotkeysXInput::Update();
+	CoreTiming::ScheduleEvent((SerialInterface::GetTicksToNextSIPoll()*12) - cyclesLate, et_HotkeysXInput);
 }
 
 static void CPCallback(u64 userdata, int cyclesLate)
@@ -219,7 +237,9 @@ static void ThrottleCallback(u64 last_time, int cyclesLate)
 		last_time = time - max_fallback;
 	}
 	else if (frame_limiter && diff > 0)
+	{
 		Common::SleepCurrentThread(diff);
+	}
 	CoreTiming::ScheduleEvent(next_event - cyclesLate, et_Throttle, last_time + 1);
 }
 
@@ -262,6 +282,8 @@ void Init()
 	et_Dec = CoreTiming::RegisterEvent("DecCallback", DecrementerCallback);
 	et_VI = CoreTiming::RegisterEvent("VICallback", VICallback);
 	et_SI = CoreTiming::RegisterEvent("SICallback", SICallback);
+	et_HotkeysXInput = CoreTiming::RegisterEvent("HotkeysXInputCallback", HotkeysXInputCallback);
+	et_SI = CoreTiming::RegisterEvent("SICallback", SICallback);
 	if (SConfig::GetInstance().m_LocalCoreStartupParameter.bSyncGPU)
 		et_CP = CoreTiming::RegisterEvent("CPCallback", CPCallback);
 	et_DSP = CoreTiming::RegisterEvent("DSPCallback", DSPCallback);
@@ -274,6 +296,7 @@ void Init()
 	CoreTiming::ScheduleEvent(VideoInterface::GetTicksPerLine(), et_VI);
 	CoreTiming::ScheduleEvent(0, et_DSP);
 	CoreTiming::ScheduleEvent(VideoInterface::GetTicksPerFrame(), et_SI);
+	CoreTiming::ScheduleEvent((VideoInterface::GetTicksPerFrame()*12), et_HotkeysXInput); //Only poll every 10 frames to avoid unnecassary CPU usage.
 	CoreTiming::ScheduleEvent(AUDIO_DMA_PERIOD, et_AudioDMA);
 	CoreTiming::ScheduleEvent(0, et_Throttle, Common::Timer::GetTimeMs());
 	if (SConfig::GetInstance().m_LocalCoreStartupParameter.bSyncGPU)

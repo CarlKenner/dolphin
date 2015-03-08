@@ -1,4 +1,4 @@
-// Copyright 2013 Dolphin Emulator Project
+// Copyright 2015 Dolphin Emulator Project
 // Licensed under GPLv2
 // Refer to the license.txt file included.
 
@@ -6,8 +6,10 @@
 #include <cinttypes>
 #include <cmath>
 #include <cstdio>
+#include <sstream>
 #include <string>
 #include <vector>
+#include <SOIL/SOIL.h>
 
 #include "Common/Atomic.h"
 #include "Common/CommonPaths.h"
@@ -49,11 +51,14 @@
 #include "VideoCommon/VertexShaderGen.h"
 #include "VideoCommon/VertexShaderManager.h"
 #include "VideoCommon/VideoConfig.h"
+#include "VideoCommon/VR.h"
 
 #if defined _WIN32 || defined HAVE_LIBAV
 #include "VideoCommon/AVIDump.h"
 #endif
 
+static bool g_first_rift_frame = true;
+static GLsync eyesFence = 0;
 
 void VideoConfig::UpdateProjectionHack()
 {
@@ -82,6 +87,8 @@ VideoConfig g_ogl_config;
 static GLuint s_ShowEFBCopyRegions_VBO = 0;
 static GLuint s_ShowEFBCopyRegions_VAO = 0;
 static SHADER s_ShowEFBCopyRegions;
+
+static GLuint g_man_texture = 0;
 
 static RasterFont* s_pfont = nullptr;
 
@@ -346,6 +353,7 @@ static void InitDriverInfo()
 // Init functions
 Renderer::Renderer()
 {
+	g_first_rift_frame = true;
 	OSDInternalW = 0;
 	OSDInternalH = 0;
 
@@ -581,6 +589,11 @@ Renderer::Renderer()
 				g_ogl_config.gl_renderer,
 				g_ogl_config.gl_version), 5000);
 
+	// Action Replay culling code brute-forcing
+	// begin searching
+	if (Core::ch_bruteforce)
+		Core::ch_comenzar_busqueda = true;
+
 	WARN_LOG(VIDEO,"Missing OGL Extensions: %s%s%s%s%s%s%s%s%s%s%s",
 			g_ActiveConfig.backend_info.bSupportsDualSourceBlend ? "" : "DualSourceBlend ",
 			g_ActiveConfig.backend_info.bSupportsPrimitiveRestart ? "" : "PrimitiveRestart ",
@@ -666,6 +679,23 @@ Renderer::Renderer()
 	}
 	UpdateActiveConfig();
 	ClearEFBCache();
+
+	{
+		/* load an image file directly as a new OpenGL texture */
+		unsigned char* img;
+		int width, height, channels;
+		/*	try to load the image	*/
+		img = SOIL_load_image((File::GetSysDirectory() + "man.png").c_str(), &width, &height, &channels, SOIL_LOAD_AUTO);
+		glGenTextures(1, &g_man_texture);
+		glActiveTexture(GL_TEXTURE0 + 9);
+		glBindTexture(GL_TEXTURE_2D, g_man_texture);
+		glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_NEAREST);
+		glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+		glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP);
+		glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP);
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, (GLsizei)width, (GLsizei)height, 0, GL_RGBA, GL_UNSIGNED_BYTE, img);
+		SOIL_free_image_data(img);
+	}
 }
 
 Renderer::~Renderer()
@@ -674,6 +704,13 @@ Renderer::~Renderer()
 
 void Renderer::Shutdown()
 {
+	static int ElementArrayBufferBinding, ArrayBufferBinding;
+	if (g_has_rift && !g_first_rift_frame && g_ActiveConfig.bEnableVR && !g_ActiveConfig.bAsynchronousTimewarp)
+	{
+		VR_PresentHMDFrame();
+	}
+	g_first_rift_frame = true;
+
 	delete g_framebuffer_manager;
 
 	g_Config.bRunning = false;
@@ -885,8 +922,24 @@ TargetRectangle Renderer::ConvertEFBRectangle(const EFBRectangle& rc)
 // therefore the width and height are (scissorBR + 1) - scissorTL
 void Renderer::SetScissorRect(const EFBRectangle& rc)
 {
-	TargetRectangle trc = g_renderer->ConvertEFBRectangle(rc);
-	glScissor(trc.left, trc.bottom, trc.GetWidth(), trc.GetHeight());
+	TargetRectangle trc;
+	// In VR we use the whole EFB instead of just the bpmem.copyTexSrc rectangle passed to this function. 
+	if (g_has_hmd)
+	{
+		EFBRectangle sourceRc;
+		sourceRc.left = 0;
+		sourceRc.right = EFB_WIDTH-1;
+		sourceRc.top = 0;
+		sourceRc.bottom = EFB_HEIGHT-1;
+		trc = g_renderer->ConvertEFBRectangle(sourceRc);
+		glScissor(0, 0, GetTargetWidth(), GetTargetHeight());
+		glDisable(GL_SCISSOR_TEST);
+	}
+	else
+	{
+		trc = g_renderer->ConvertEFBRectangle(rc);
+		glScissor(trc.left, trc.bottom, trc.GetWidth(), trc.GetHeight());
+	}
 }
 
 void Renderer::SetColorMask()
@@ -1215,12 +1268,11 @@ void Renderer::SetViewport()
 	int scissorYOff = bpmem.scissorOffset.y * 2;
 
 	// TODO: ceil, floor or just cast to int?
-	float X = EFBToScaledXf(xfmem.viewport.xOrig - xfmem.viewport.wd - (float)scissorXOff);
-	float Y = EFBToScaledYf((float)EFB_HEIGHT - xfmem.viewport.yOrig + xfmem.viewport.ht + (float)scissorYOff);
-	float Width = EFBToScaledXf(2.0f * xfmem.viewport.wd);
-	float Height = EFBToScaledYf(-2.0f * xfmem.viewport.ht);
-	float GLNear = (xfmem.viewport.farZ - xfmem.viewport.zRange) / 16777216.0f;
-	float GLFar = xfmem.viewport.farZ / 16777216.0f;
+	float X, Y, Width, Height;
+	X = EFBToScaledXf(xfmem.viewport.xOrig - xfmem.viewport.wd - (float)scissorXOff);
+	Y = EFBToScaledYf((float)EFB_HEIGHT - xfmem.viewport.yOrig + xfmem.viewport.ht + (float)scissorYOff);
+	Width = EFBToScaledXf(2.0f * xfmem.viewport.wd);
+	Height = EFBToScaledYf(-2.0f * xfmem.viewport.ht);
 	if (Width < 0)
 	{
 		X += Width;
@@ -1231,11 +1283,28 @@ void Renderer::SetViewport()
 		Y += Height;
 		Height *= -1;
 	}
+	g_requested_viewport = EFBRectangle((int)X, (int)Y, (int)Width, (int)Height);
+
+	if (g_viewport_type != VIEW_RENDER_TO_TEXTURE && g_has_hmd && g_ActiveConfig.bEnableVR)
+	{
+		// In VR we must use the entire EFB, not just the copyTexSrc area that is normally used.
+		// So scale from copyTexSrc to entire EFB, and we won't use copyTexSrc during rendering.
+		//X = (xfmem.viewport.xOrig - xfmem.viewport.wd - bpmem.copyTexSrcXY.x - (float)scissorXOff) * (float)GetTargetWidth() / (float)bpmem.copyTexSrcWH.x;
+		//Y = (float)GetTargetHeight() - (xfmem.viewport.yOrig - xfmem.viewport.ht - bpmem.copyTexSrcXY.y - (float)scissorYOff) * (float)GetTargetHeight() / (float)bpmem.copyTexSrcWH.y;
+		//Width = (2.0f * xfmem.viewport.wd) * (float)GetTargetWidth() / (float)bpmem.copyTexSrcWH.x;
+		//Height = (-2.0f * xfmem.viewport.ht) * (float)GetTargetHeight() / (float)bpmem.copyTexSrcWH.y;
+		X = 0.0f; Y = 0.0f; Width = (float)GetTargetWidth(); Height = (float)GetTargetHeight();
+	}
+	g_rendered_viewport = EFBRectangle((int)X, (int)Y, (int)Width, (int)Height);
+
+	float GLNear = (xfmem.viewport.farZ - xfmem.viewport.zRange) / 16777216.0f;
+	float GLFar = xfmem.viewport.farZ / 16777216.0f;
 
 	// Update the view port
 	if (g_ogl_config.bSupportViewportFloat)
 	{
 		glViewportIndexedf(0, X, Y, Width, Height);
+		//NOTICE_LOG(VR, "glViewportIndexedf(0,   %f, %f,   %f, %f) TargetSize=%d, %d", X, Y, Width, Height, GetTargetWidth(), GetTargetHeight());
 	}
 	else
 	{
@@ -1244,8 +1313,10 @@ void Renderer::SetViewport()
 			return static_cast<GLint>(ceilf(f));
 		};
 		glViewport(iceilf(X), iceilf(Y), iceilf(Width), iceilf(Height));
+		INFO_LOG(VR, "glViewport(%d, %d,   %d, %d)", ceil(X), ceil(Y), ceil(Width), ceil(Height));
 	}
 	glDepthRangef(GLNear, GLFar);
+	//NOTICE_LOG(VR, "gDepthRangef(%f, %f)", GLNear, GLFar);
 }
 
 void Renderer::ClearScreen(const EFBRectangle& rc, bool colorEnable, bool alphaEnable, bool zEnable, u32 color, u32 z)
@@ -1256,7 +1327,7 @@ void Renderer::ClearScreen(const EFBRectangle& rc, bool colorEnable, bool alphaE
 	GLboolean const
 		color_mask = colorEnable ? GL_TRUE : GL_FALSE,
 		alpha_mask = alphaEnable ? GL_TRUE : GL_FALSE;
-	glColorMask(color_mask,  color_mask,  color_mask,  alpha_mask);
+	glColorMask(color_mask, color_mask, color_mask, alpha_mask);
 
 	glClearColor(
 		float((color >> 16) & 0xFF) / 255.0f,
@@ -1270,12 +1341,36 @@ void Renderer::ClearScreen(const EFBRectangle& rc, bool colorEnable, bool alphaE
 	glClearDepthf(float(z & 0xFFFFFF) / float(0xFFFFFF));
 
 	// Update rect for clearing the picture
-	glEnable(GL_SCISSOR_TEST);
+	// TODO fix this properly by setting the scissor rectangle
+	if (g_has_hmd)
+		glDisable(GL_SCISSOR_TEST);
+	else
+		glEnable(GL_SCISSOR_TEST);
 
 	TargetRectangle const targetRc = ConvertEFBRectangle(rc);
 	glScissor(targetRc.left, targetRc.bottom, targetRc.GetWidth(), targetRc.GetHeight());
 
 	// glColorMask/glDepthMask/glScissor affect glClear (glViewport does not)
+	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+	RestoreAPIState();
+
+	ClearEFBCache();
+}
+
+void Renderer::SkipClearScreen(bool colorEnable, bool alphaEnable, bool zEnable)
+{
+	ResetAPIState();
+
+	// color
+	GLboolean const
+		color_mask = colorEnable ? GL_TRUE : GL_FALSE,
+		alpha_mask = alphaEnable ? GL_TRUE : GL_FALSE;
+	glColorMask(color_mask, color_mask, color_mask, alpha_mask);
+
+	// depth
+	glDepthMask(zEnable ? GL_TRUE : GL_FALSE);
+
 	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
 	RestoreAPIState();
@@ -1303,7 +1398,10 @@ void Renderer::ReinterpretPixelData(unsigned int convtype)
 {
 	if (convtype == 0 || convtype == 2)
 	{
-		FramebufferManager::ReinterpretPixelData(convtype);
+		// Reinterpretting pixel data crashes OpenGL at the next glFinish
+		//	FramebufferManager::ReinterpretPixelData(convtype);
+		if (!g_has_hmd)
+			FramebufferManager::ReinterpretPixelData(convtype);
 	}
 	else
 	{
@@ -1426,9 +1524,150 @@ static void DumpFrame(const std::vector<u8>& data, int w, int h)
 #endif
 }
 
+void Renderer::AsyncTimewarpDraw()
+{
+	VR_DrawAsyncTimewarpFrame();
+	Common::AtomicIncrement(g_drawn_vr);
+
+	static int w = 0, h = 0;
+	// Save screenshot
+	if (s_bScreenshot)
+	{
+		TargetRectangle flipped_trc = GetTargetRectangle();
+		// Flip top and bottom for some reason; TODO: Fix the code to suck less?
+		std::swap(flipped_trc.top, flipped_trc.bottom);
+
+		glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+		std::lock_guard<std::mutex> lk(s_criticalScreenshot);
+		SaveScreenshot(s_sScreenshotName, flipped_trc);
+		// Reset settings
+		s_sScreenshotName.clear();
+		s_bScreenshot = false;
+	}
+
+	// Frame dumps are handled a little differently in Windows
+	// Frame dumping disabled entirely on GLES3
+	if (GLInterface->GetMode() == GLInterfaceMode::MODE_OPENGL)
+	{
+#if defined _WIN32 || defined HAVE_LIBAV
+		if (SConfig::GetInstance().m_DumpFrames)
+		{
+			TargetRectangle flipped_trc = GetTargetRectangle();
+			// Flip top and bottom for some reason; TODO: Fix the code to suck less?
+			std::swap(flipped_trc.top, flipped_trc.bottom);
+
+			glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+			std::lock_guard<std::mutex> lk(s_criticalScreenshot);
+			if (frame_data.empty() || w != flipped_trc.GetWidth() ||
+				h != flipped_trc.GetHeight())
+			{
+				w = flipped_trc.GetWidth();
+				h = flipped_trc.GetHeight();
+				frame_data.resize(3 * w * h);
+			}
+			glPixelStorei(GL_PACK_ALIGNMENT, 1);
+			glReadPixels(flipped_trc.left, flipped_trc.bottom, w, h, GL_BGR, GL_UNSIGNED_BYTE, &frame_data[0]);
+			if (w > 0 && h > 0)
+			{
+				if (!bLastFrameDumped)
+				{
+#ifdef _WIN32
+					bAVIDumping = AVIDump::Start(nullptr, w, h);
+#else
+					bAVIDumping = AVIDump::Start(w, h);
+#endif
+					if (!bAVIDumping)
+					{
+						OSD::AddMessage("AVIDump Start failed", 2000);
+					}
+					else
+					{
+						OSD::AddMessage(StringFromFormat(
+							"Dumping Frames to \"%sframedump0.avi\" (%dx%d RGB24)",
+							File::GetUserPath(D_DUMPFRAMES_IDX).c_str(), w, h), 2000);
+					}
+				}
+				if (bAVIDumping)
+				{
+#ifndef _WIN32
+					FlipImageData(&frame_data[0], w, h);
+#endif
+
+					AVIDump::AddFrame(&frame_data[0], w, h);
+				}
+
+				bLastFrameDumped = true;
+			}
+			else
+			{
+				NOTICE_LOG(VIDEO, "Error reading framebuffer");
+			}
+		}
+		else
+		{
+			if (bLastFrameDumped && bAVIDumping)
+			{
+				std::vector<u8>().swap(frame_data);
+				w = h = 0;
+				AVIDump::Stop();
+				bAVIDumping = false;
+				OSD::AddMessage("Stop dumping frames", 2000);
+			}
+			bLastFrameDumped = false;
+		}
+#else
+		if (g_ActiveConfig.bDumpFrames)
+		{
+			glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+			std::lock_guard<std::mutex> lk(s_criticalScreenshot);
+			std::string movie_file_name;
+			w = GetTargetRectangle().GetWidth();
+			h = GetTargetRectangle().GetHeight();
+			frame_data.resize(3 * w * h);
+			glPixelStorei(GL_PACK_ALIGNMENT, 1);
+			glReadPixels(GetTargetRectangle().left, GetTargetRectangle().bottom, w, h, GL_BGR, GL_UNSIGNED_BYTE, &frame_data[0]);
+			if (GL_REPORT_ERROR() == GL_NO_ERROR)
+			{
+				if (!bLastFrameDumped)
+				{
+					movie_file_name = File::GetUserPath(D_DUMPFRAMES_IDX) + "framedump.raw";
+					pFrameDump.Open(movie_file_name, "wb");
+					if (!pFrameDump)
+					{
+						OSD::AddMessage("Error opening framedump.raw for writing.", 2000);
+					}
+					else
+					{
+						OSD::AddMessage(StringFromFormat("Dumping Frames to \"%s\" (%dx%d RGB24)", movie_file_name.c_str(), w, h), 2000);
+					}
+				}
+				if (pFrameDump)
+				{
+					FlipImageData(&frame_data[0], w, h);
+					pFrameDump.WriteBytes(&frame_data[0], w * 3 * h);
+					pFrameDump.Flush();
+				}
+				bLastFrameDumped = true;
+			}
+		}
+		else
+		{
+			if (bLastFrameDumped)
+				pFrameDump.Close();
+			bLastFrameDumped = false;
+		}
+#endif
+	}
+	// end of frame dumping code
+}
+
 // This function has the final picture. We adjust the aspect ratio here.
 void Renderer::SwapImpl(u32 xfbAddr, u32 fbWidth, u32 fbStride, u32 fbHeight, const EFBRectangle& rc, float Gamma)
 {
+	//rafa
+	if (Core::ch_bruteforce)
+		Core::ch_cacheo_pasado = true;
+
 	if (g_ogl_config.bSupportsDebug)
 	{
 		if (LogManager::GetInstance()->IsEnabled(LogTypes::VIDEO, LogTypes::LERROR))
@@ -1436,6 +1675,21 @@ void Renderer::SwapImpl(u32 xfbAddr, u32 fbWidth, u32 fbStride, u32 fbHeight, co
 		else
 			glDisable(GL_DEBUG_OUTPUT);
 	}
+
+#ifdef HAVE_OCULUSSDK
+	if (g_first_rift_frame && g_has_rift && g_ActiveConfig.bEnableVR)
+	{
+		if (!g_ActiveConfig.bAsynchronousTimewarp)
+		{
+			VR_BeginFrame();
+			VR_GetEyePoses();
+		}
+		g_first_rift_frame = false;
+
+		VR_ConfigureHMDPrediction();
+		VR_ConfigureHMDTracking();
+	}
+#endif
 
 	static int w = 0, h = 0;
 	if (g_bSkipCurrentFrame || (!XFBWrited && !g_ActiveConfig.RealXFBEnabled()) || !fbWidth || !fbHeight)
@@ -1454,6 +1708,7 @@ void Renderer::SwapImpl(u32 xfbAddr, u32 fbWidth, u32 fbStride, u32 fbHeight, co
 		return;
 	}
 
+	eyesFence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
 	ResetAPIState();
 
 	UpdateDrawRectangle(s_backbuffer_width, s_backbuffer_height);
@@ -1465,7 +1720,188 @@ void Renderer::SwapImpl(u32 xfbAddr, u32 fbWidth, u32 fbStride, u32 fbHeight, co
 	// Copy the framebuffer to screen.
 	const XFBSource* xfbSource = nullptr;
 
-	if (g_ActiveConfig.bUseXFB)
+	if (g_has_rift && g_ActiveConfig.bEnableVR)
+	{
+		EFBRectangle sourceRc;
+		// In VR we use the whole EFB instead of just the bpmem.copyTexSrc rectangle passed to this function. 
+		sourceRc.left = 0;
+		sourceRc.right = EFB_WIDTH;
+		sourceRc.top = 0;
+		sourceRc.bottom = EFB_HEIGHT;
+
+		TargetRectangle targetRc = ConvertEFBRectangle(sourceRc);
+
+		if (g_ActiveConfig.bUseXFB)
+		{
+			flipped_trc = targetRc;
+			// Flip top and bottom for some reason; TODO: Fix the code to suck less?
+			//std::swap(flipped_trc.top, flipped_trc.bottom);
+
+			// draw each xfb source
+			for (u32 i = 0; i < xfbCount; ++i)
+			{
+				xfbSource = (const XFBSource*)xfbSourceList[i];
+
+				TargetRectangle drawRc;
+
+				if (g_ActiveConfig.bUseRealXFB)
+				{
+					drawRc = flipped_trc;
+				}
+				else
+				{
+					// use virtual xfb with offset
+					int xfbHeight = xfbSource->srcHeight;
+					int xfbWidth = xfbSource->srcWidth;
+					int hOffset = ((s32)xfbSource->srcAddr - (s32)xfbAddr) / ((s32)fbStride * 2);
+
+					drawRc.top = flipped_trc.top - hOffset * flipped_trc.GetHeight() / (s32)fbHeight;
+					drawRc.bottom = flipped_trc.top - (hOffset + xfbHeight) * flipped_trc.GetHeight() / (s32)fbHeight;
+					drawRc.left = flipped_trc.left + (flipped_trc.GetWidth() - xfbWidth * flipped_trc.GetWidth() / (s32)fbStride) / 2;
+					drawRc.right = flipped_trc.left + (flipped_trc.GetWidth() + xfbWidth * flipped_trc.GetWidth() / (s32)fbStride) / 2;
+				}
+				// Tell the OSD Menu about the current internal resolution
+				OSDInternalW = xfbSource->sourceRc.GetWidth(); OSDInternalH = xfbSource->sourceRc.GetHeight();
+
+				TargetRectangle sourceRc;
+				sourceRc.left = xfbSource->sourceRc.left;
+				sourceRc.right = xfbSource->sourceRc.right;
+				sourceRc.top = xfbSource->sourceRc.top;
+				sourceRc.bottom = xfbSource->sourceRc.bottom;
+
+				sourceRc.right -= Renderer::EFBToScaledX(fbStride - fbWidth);
+
+				glBindFramebuffer(GL_DRAW_FRAMEBUFFER, FramebufferManager::m_eyeFramebuffer[0]);
+				if (g_ActiveConfig.iStereoMode == STEREO_OCULUS)
+				{
+					m_post_processor->BlitFromTexture(sourceRc, drawRc, xfbSource->texture, xfbSource->texWidth, xfbSource->texHeight, 0);
+
+					glBindFramebuffer(GL_DRAW_FRAMEBUFFER, FramebufferManager::m_eyeFramebuffer[1]);
+					m_post_processor->BlitFromTexture(sourceRc, drawRc, xfbSource->texture, xfbSource->texWidth, xfbSource->texHeight, 1);
+				}
+				else
+				{
+					m_post_processor->BlitFromTexture(sourceRc, drawRc, xfbSource->texture, xfbSource->texWidth, xfbSource->texHeight);
+				}
+			}
+		}
+		else
+		{
+			// for msaa mode, we must resolve the efb content to non-msaa
+			GLuint tex = FramebufferManager::ResolveAndGetRenderTarget(sourceRc);
+
+			glBindFramebuffer(GL_DRAW_FRAMEBUFFER, FramebufferManager::m_eyeFramebuffer[0]);
+			if (g_ActiveConfig.iStereoMode == STEREO_OCULUS)
+			{
+				m_post_processor->BlitFromTexture(targetRc, targetRc, tex, s_target_width, s_target_height, 0);
+
+				glBindFramebuffer(GL_DRAW_FRAMEBUFFER, FramebufferManager::m_eyeFramebuffer[1]);
+				m_post_processor->BlitFromTexture(targetRc, targetRc, tex, s_target_width, s_target_height, 1);
+			}
+			else
+			{
+				m_post_processor->BlitFromTexture(targetRc, flipped_trc, tex, s_target_width, s_target_height);
+			}
+		}
+		glEnable(GL_BLEND);
+		glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+		// Reset viewport for drawing text
+		glViewport(400, 400, GLInterface->GetBackBufferWidth() - 400, GLInterface->GetBackBufferHeight() - 400);
+		ShowEfbCopyRegions();
+		DrawDebugText();
+		// Do our OSD callbacks
+		OSD::DoCallbacks(OSD::OSD_ONFRAME);
+		OSD::DrawMessages();
+
+		if (!g_ActiveConfig.bAsynchronousTimewarp)
+		{
+			static int ElementArrayBufferBinding, ArrayBufferBinding, VertexArrayBinding;
+			glGetIntegerv(GL_ELEMENT_ARRAY_BUFFER_BINDING, &ElementArrayBufferBinding);
+			glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &ArrayBufferBinding);
+			glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &VertexArrayBinding);
+			glBindVertexArray(0);
+			glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+			glBindBuffer(GL_ARRAY_BUFFER, 0);
+			VR_PresentHMDFrame();
+			Common::AtomicIncrement(g_drawn_vr);
+
+			// VR Synchronous Timewarp
+			static int real_frame_count_for_timewarp = 0;
+
+			if (g_ActiveConfig.bPullUp20fpsTimewarp)
+			{
+				if (real_frame_count_for_timewarp % 4 == 1)
+				{
+					g_ActiveConfig.iExtraFrames = 2;
+				}
+				else
+				{
+					g_ActiveConfig.iExtraFrames = 3;
+				}
+			}
+			else if (g_ActiveConfig.bPullUp30fpsTimewarp)
+			{
+				if (real_frame_count_for_timewarp % 2 == 1)
+				{
+					g_ActiveConfig.iExtraFrames = 1;
+				}
+				else
+				{
+					g_ActiveConfig.iExtraFrames = 2;
+				}
+			}
+			else if (g_ActiveConfig.bPullUp60fpsTimewarp)
+			{
+				if (real_frame_count_for_timewarp % 4 == 0)
+					g_ActiveConfig.iExtraFrames = 1;
+				else
+					g_ActiveConfig.iExtraFrames = 0;
+			}
+			else if (g_ActiveConfig.bPullUp20fps || g_ActiveConfig.bPullUp30fps || g_ActiveConfig.bPullUp60fps)
+			{
+				g_ActiveConfig.iExtraFrames = 0;
+			}
+
+			++real_frame_count_for_timewarp;
+
+			for (int i = 0; i < (int)g_ActiveConfig.iExtraFrames; ++i)
+			{
+				VR_DrawTimewarpFrame();
+				Common::AtomicIncrement(g_drawn_vr);
+			}
+
+			//glBindVertexArray(VertexArrayBinding);
+			glBindVertexArray(0);
+			glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ElementArrayBufferBinding);
+			glBindBuffer(GL_ARRAY_BUFFER, ArrayBufferBinding);
+		}
+		else
+		{
+			// Wait for OpenGL to finish drawing the commands we have given it,
+			// and when finished, swap the back buffer textures to the front buffer textures
+			do
+			{
+				eyesFence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+				if (eyesFence != 0) {
+					GLenum result = glClientWaitSync(eyesFence, GL_SYNC_FLUSH_COMMANDS_BIT, 0);
+					switch (result)
+					{
+					case GL_ALREADY_SIGNALED:
+					case GL_CONDITION_SATISFIED:
+						eyesFence = 0;
+						g_vr_lock.lock();
+						FramebufferManager::SwapAsyncFrontBuffers();
+						g_front_eye_poses[0] = g_eye_poses[0];
+						g_front_eye_poses[1] = g_eye_poses[1];
+						//glFinish();
+						g_vr_lock.unlock();
+						break;
+					}
+				}
+			} while (eyesFence != 0);
+		}
+	}
+	else if (g_ActiveConfig.bUseXFB)
 	{
 		// draw each xfb source
 		for (u32 i = 0; i < xfbCount; ++i)
@@ -1510,22 +1946,49 @@ void Renderer::SwapImpl(u32 xfbAddr, u32 fbWidth, u32 fbStride, u32 fbHeight, co
 
 			sourceRc.right -= Renderer::EFBToScaledX(fbStride - fbWidth);
 
+			glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+
 			BlitScreen(sourceRc, drawRc, xfbSource->texture, xfbSource->texWidth, xfbSource->texHeight);
 		}
 	}
 	else
 	{
-		TargetRectangle targetRc = ConvertEFBRectangle(rc);
+		EFBRectangle sourceRc;
+			sourceRc = rc;
+		TargetRectangle targetRc = ConvertEFBRectangle(sourceRc);
 
 		// for msaa mode, we must resolve the efb content to non-msaa
-		GLuint tex = FramebufferManager::ResolveAndGetRenderTarget(rc);
+		GLuint tex = FramebufferManager::ResolveAndGetRenderTarget(sourceRc);
+		glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
 		BlitScreen(targetRc, flipped_trc, tex, s_target_width, s_target_height);
 	}
 
 	glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
 
 	// Save screenshot
-	if (s_bScreenshot)
+	
+	if (Core::ch_bruteforce && Core::ch_tomarFoto>0)
+	{
+		if (Core::ch_tomarFoto == 1)
+		{
+			Core::ch_tomarFoto = 0;
+			std::lock_guard<std::mutex> lk(s_criticalScreenshot);
+			std::ostringstream s;
+			s << Core::ch_codigoactual;
+
+			s_bScreenshot = true;
+			s_sScreenshotName = File::GetUserPath(D_SCREENSHOTS_IDX) + Core::ch_title_id + "/" + Core::ch_map[Core::ch_codigoactual] + ".png";
+			Core::ch_cicles_without_snapshot = 0;
+			Core::ch_cacheo_pasado = true;
+			Core::ch_next_code = true; //TODO next code quitar de aqui
+		}
+		else
+		{
+			Core::ch_tomarFoto -= 1;
+		}
+	}
+
+	if (s_bScreenshot && !g_ActiveConfig.bAsynchronousTimewarp)
 	{
 		std::lock_guard<std::mutex> lk(s_criticalScreenshot);
 		SaveScreenshot(s_sScreenshotName, flipped_trc);
@@ -1535,8 +1998,8 @@ void Renderer::SwapImpl(u32 xfbAddr, u32 fbWidth, u32 fbStride, u32 fbHeight, co
 	}
 
 	// Frame dumps are handled a little differently in Windows
-	// Frame dumping disabled entirely on GLES3
-	if (GLInterface->GetMode() == GLInterfaceMode::MODE_OPENGL)
+	// Frame dumping disabled entirely on GLES3, or handled elsewhere for Oculus Rift's Asynchronous Timewarp
+	if (GLInterface->GetMode() == GLInterfaceMode::MODE_OPENGL && !g_ActiveConfig.bAsynchronousTimewarp)
 	{
 #if defined _WIN32 || defined HAVE_LIBAV
 		if (SConfig::GetInstance().m_DumpFrames)
@@ -1610,28 +2073,28 @@ void Renderer::SwapImpl(u32 xfbAddr, u32 fbWidth, u32 fbStride, u32 fbHeight, co
 			glPixelStorei(GL_PACK_ALIGNMENT, 1);
 			glReadPixels(GetTargetRectangle().left, GetTargetRectangle().bottom, w, h, GL_BGR, GL_UNSIGNED_BYTE, &frame_data[0]);
 
-			if (!bLastFrameDumped)
-			{
-				movie_file_name = File::GetUserPath(D_DUMPFRAMES_IDX) + "framedump.raw";
+				if (!bLastFrameDumped)
+				{
+					movie_file_name = File::GetUserPath(D_DUMPFRAMES_IDX) + "framedump.raw";
 				File::CreateFullPath(movie_file_name);
-				pFrameDump.Open(movie_file_name, "wb");
-				if (!pFrameDump)
-				{
-					OSD::AddMessage("Error opening framedump.raw for writing.", 2000);
+					pFrameDump.Open(movie_file_name, "wb");
+					if (!pFrameDump)
+					{
+						OSD::AddMessage("Error opening framedump.raw for writing.", 2000);
+					}
+					else
+					{
+						OSD::AddMessage(StringFromFormat("Dumping Frames to \"%s\" (%dx%d RGB24)", movie_file_name.c_str(), w, h), 2000);
+					}
 				}
-				else
+				if (pFrameDump)
 				{
-					OSD::AddMessage(StringFromFormat("Dumping Frames to \"%s\" (%dx%d RGB24)", movie_file_name.c_str(), w, h), 2000);
+					FlipImageData(&frame_data[0], w, h);
+					pFrameDump.WriteBytes(&frame_data[0], w * 3 * h);
+					pFrameDump.Flush();
 				}
+				bLastFrameDumped = true;
 			}
-			if (pFrameDump)
-			{
-				FlipImageData(&frame_data[0], w, h);
-				pFrameDump.WriteBytes(&frame_data[0], w * 3 * h);
-				pFrameDump.Flush();
-			}
-			bLastFrameDumped = true;
-		}
 		else
 		{
 			if (bLastFrameDumped)
@@ -1681,16 +2144,21 @@ void Renderer::SwapImpl(u32 xfbAddr, u32 fbWidth, u32 fbStride, u32 fbHeight, co
 			s_MSAASamples = GetNumMSAASamples(s_last_multisample_mode);
 			ApplySSAASettings();
 
+			if (g_ActiveConfig.bAsynchronousTimewarp)
+				g_vr_lock.lock();
 			delete g_framebuffer_manager;
 			g_framebuffer_manager = new FramebufferManager(s_target_width, s_target_height,
 				s_MSAASamples);
+			glFinish();
+			if (g_ActiveConfig.bAsynchronousTimewarp)
+				g_vr_lock.unlock();
 
 			PixelShaderManager::SetEfbScaleChanged();
 		}
 	}
 
 	// ---------------------------------------------------------------------
-	if (!DriverDetails::HasBug(DriverDetails::BUG_BROKENSWAP))
+	if (!DriverDetails::HasBug(DriverDetails::BUG_BROKENSWAP) && !(g_has_rift && g_ActiveConfig.bEnableVR))
 	{
 		glEnable(GL_BLEND);
 		glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -1706,12 +2174,17 @@ void Renderer::SwapImpl(u32 xfbAddr, u32 fbWidth, u32 fbStride, u32 fbHeight, co
 		OSD::DrawMessages();
 	}
 	// Copy the rendered frame to the real window
-	GLInterface->Swap();
+	if (!(g_has_rift && g_ActiveConfig.bEnableVR))
+		GLInterface->Swap();
+
+	NewVRFrame();
 
 	// Clear framebuffer
-	if (!DriverDetails::HasBug(DriverDetails::BUG_BROKENSWAP))
+	if (!DriverDetails::HasBug(DriverDetails::BUG_BROKENSWAP) && !g_ActiveConfig.bDontClearScreen)
 	{
 		glClearColor(0, 0, 0, 0);
+		if (g_has_hmd)
+			glClearDepth(1);
 		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 	}
 
@@ -1724,15 +2197,67 @@ void Renderer::SwapImpl(u32 xfbAddr, u32 fbWidth, u32 fbStride, u32 fbHeight, co
 	// Clean out old stuff from caches. It's not worth it to clean out the shader caches.
 	TextureCache::Cleanup(frameCount);
 
+	if (g_has_rift)
+	{
+		if (g_Config.bLowPersistence != g_ActiveConfig.bLowPersistence ||
+			g_Config.bDynamicPrediction != g_ActiveConfig.bDynamicPrediction ||
+			g_Config.bNoMirrorToWindow != g_ActiveConfig.bNoMirrorToWindow)
+		{
+			VR_ConfigureHMDPrediction();
+		}
+
+		if (g_Config.bOrientationTracking != g_ActiveConfig.bOrientationTracking ||
+			g_Config.bMagYawCorrection != g_ActiveConfig.bMagYawCorrection ||
+			g_Config.bPositionTracking != g_ActiveConfig.bPositionTracking)
+		{
+			VR_ConfigureHMDTracking();
+		}
+
+		if (g_Config.bChromatic != g_ActiveConfig.bChromatic ||
+			g_Config.bTimewarp != g_ActiveConfig.bTimewarp ||
+			g_Config.bVignette != g_ActiveConfig.bVignette ||
+			g_Config.bNoRestore != g_ActiveConfig.bNoRestore ||
+			g_Config.bFlipVertical != g_ActiveConfig.bFlipVertical ||
+			g_Config.bSRGB != g_ActiveConfig.bSRGB ||
+			g_Config.bOverdrive != g_ActiveConfig.bOverdrive ||
+			g_Config.bHqDistortion != g_ActiveConfig.bHqDistortion ||
+			g_fov_changed)
+		{
+			VR_ConfigureHMD();
+		}
+
+		//To do: Probably not the right place for these.  Why do they update for D3D automatically, but not for OpenGL?
+		g_ActiveConfig.iExtraFrames = g_Config.iExtraFrames;
+		g_ActiveConfig.iExtraVideoLoops = g_Config.iExtraVideoLoops;
+		g_ActiveConfig.iExtraVideoLoopsDivider = g_Config.iExtraVideoLoopsDivider;
+		g_ActiveConfig.fTimeWarpTweak = g_Config.fTimeWarpTweak;
+	}
+
 	// Render to the framebuffer.
 	FramebufferManager::SetFramebuffer(0);
 
 	RestoreAPIState();
 
 	g_Config.iSaveTargetId = 0;
+	
+	// VR layer debugging, sometimes layers need to flash.
+	g_Config.iFlashState++;
+	if (g_Config.iFlashState >= 10)
+		g_Config.iFlashState = 0;
 
 	UpdateActiveConfig();
+	// VR Real XFB isn't implemented yet, so always disable it for VR
+	if (g_has_hmd && g_ActiveConfig.bEnableVR)
+	{
+		g_ActiveConfig.bUseRealXFB = false;
+		// always stretch to fit
+		g_ActiveConfig.iAspectRatio = 3;
+	}
 	TextureCache::OnConfigChanged(g_ActiveConfig);
+	if (g_has_rift && g_ActiveConfig.bEnableVR && !g_ActiveConfig.bAsynchronousTimewarp)
+	{
+		VR_BeginFrame();
+	}
 
 	// For testing zbuffer targets.
 	// Renderer::SetZBufferRender();
@@ -1753,7 +2278,11 @@ void Renderer::ResetAPIState()
 	glDisable(GL_CULL_FACE);
 	glDisable(GL_BLEND);
 	if (GLInterface->GetMode() == GLInterfaceMode::MODE_OPENGL)
+	{
 		glDisable(GL_COLOR_LOGIC_OP);
+		if (g_ActiveConfig.bWireFrame)
+			glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+	}
 	glDepthMask(GL_FALSE);
 	glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
 }
@@ -1761,7 +2290,10 @@ void Renderer::ResetAPIState()
 void Renderer::RestoreAPIState()
 {
 	// Gets us back into a more game-like state.
-	glEnable(GL_SCISSOR_TEST);
+	if (g_has_hmd)
+		glDisable(GL_SCISSOR_TEST);
+	else
+		glEnable(GL_SCISSOR_TEST);
 	SetGenerationMode();
 	BPFunctions::SetScissor();
 	SetColorMask();
@@ -1776,6 +2308,10 @@ void Renderer::RestoreAPIState()
 		glBindVertexArray(vm->m_last_vao);
 
 	TextureCache::SetStage();
+	if (g_ActiveConfig.bDisableNearClipping)
+		glEnable(GL_DEPTH_CLAMP);
+	else
+		glDisable(GL_DEPTH_CLAMP);
 }
 
 void Renderer::SetGenerationMode()

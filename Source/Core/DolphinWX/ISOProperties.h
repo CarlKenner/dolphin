@@ -20,6 +20,7 @@
 
 #include "Common/IniFile.h"
 #include "Core/ActionReplay.h"
+#include "DolphinWX/InputConfigDiag.h"
 
 class GameListItem;
 class wxButton;
@@ -28,6 +29,7 @@ class wxCheckListBox;
 class wxChoice;
 class wxSlider;
 class wxSpinCtrl;
+class wxSpinCtrlDouble;
 class wxStaticBitmap;
 class wxTextCtrl;
 class wxTreeCtrl;
@@ -83,8 +85,13 @@ private:
 	wxCheckBox* MonoDepth;
 
 	wxArrayString arrayStringFor_EmuState;
+	wxArrayString arrayStringFor_VRState;
 	wxChoice* EmuState;
 	wxTextCtrl* EmuIssues;
+	wxArrayString arrayStringFor_RmObjs;
+	wxCheckListBox* RmObjs;
+	wxButton* EditRmObj;
+	wxButton* RemoveRmObj;
 	wxArrayString arrayStringFor_Patches;
 	wxCheckListBox* Patches;
 	wxButton* EditPatch;
@@ -98,6 +105,29 @@ private:
 	wxButton* EditSpeedhack;
 	wxButton* AddSpeedhack;
 	wxButton* RemoveSpeedhack;
+
+
+	// VR
+	wxCheckBox *Disable3D;
+	wxCheckBox *HudFullscreen;
+	wxCheckBox *HudOnTop;
+	wxSpinCtrlDouble* UnitsPerMetre;
+	wxSpinCtrlDouble* HudDistance;
+	wxSpinCtrlDouble* HudThickness;
+	wxSpinCtrlDouble* Hud3DCloser;
+	wxSpinCtrlDouble* CameraForward;
+	wxSpinCtrlDouble* CameraPitch;
+	wxSpinCtrlDouble* AimDistance;
+	wxSpinCtrlDouble* ScreenHeight;
+	wxSpinCtrlDouble* ScreenDistance;
+	wxSpinCtrlDouble* ScreenThickness;
+	wxSpinCtrlDouble* ScreenUp;
+	wxSpinCtrlDouble* ScreenRight;
+	wxSpinCtrlDouble* ScreenPitch;
+	wxSpinCtrlDouble* MinFOV;
+	wxChoice *VRState;
+	wxTextCtrl *VRIssues;
+
 
 	wxTextCtrl* m_Name;
 	wxTextCtrl* m_GameID;
@@ -126,6 +156,25 @@ private:
 
 		ID_NOTEBOOK,
 		ID_GAMECONFIG,
+		ID_VR,
+		ID_DISABLE_3D,
+		ID_HUD_FULLSCREEN,
+		ID_HUD_ON_TOP,
+		ID_UNITS_PER_METRE,
+		ID_HUD_DISTANCE,
+		ID_HUD_THICKNESS,
+		ID_HUD_3D_CLOSER,
+		ID_CAMERA_FORWARD,
+		ID_CAMERA_PITCH,
+		ID_AIM_DISTANCE,
+		ID_MIN_FOV,
+		ID_SCREEN_HEIGHT,
+		ID_SCREEN_DISTANCE,
+		ID_SCREEN_THICKNESS,
+		ID_SCREEN_RIGHT,
+		ID_SCREEN_UP,
+		ID_SCREEN_PITCH,
+		ID_RMOBJ_PAGE,
 		ID_PATCH_PAGE,
 		ID_ARCODE_PAGE,
 		ID_SPEEDHACK_PAGE,
@@ -148,6 +197,11 @@ private:
 		ID_SHOWDEFAULTCONFIG,
 		ID_EMUSTATE,
 		ID_EMU_ISSUES,
+		ID_RMOBJS_LIST,
+		ID_RMOBJS_CHECKBOX,
+		ID_EDITRMOBJ,
+		ID_ADDRMOBJ,
+		ID_REMOVERMOBJ,
 		ID_PATCHES_LIST,
 		ID_EDITPATCH,
 		ID_ADDPATCH,
@@ -194,7 +248,9 @@ private:
 	void OnEditConfig(wxCommandEvent& event);
 	void OnComputeMD5Sum(wxCommandEvent& event);
 	void OnShowDefaultConfig(wxCommandEvent& event);
+	void RmObjButtonClicked(wxCommandEvent& event);
 	void ListSelectionChanged(wxCommandEvent& event);
+	void CheckboxSelectionChanged(wxCommandEvent& event);
 	void PatchButtonClicked(wxCommandEvent& event);
 	void ActionReplayButtonClicked(wxCommandEvent& event);
 	void RightClickOnBanner(wxMouseEvent& event);
@@ -224,10 +280,13 @@ private:
 	std::string GameIniFileDefault;
 	std::string GameIniFileLocal;
 
+	std::set<std::string> DefaultRmObjs;
 	std::set<std::string> DefaultPatches;
 	std::set<std::string> DefaultCheats;
 
 	void LoadGameConfig();
+	void RmObjList_Load();
+	void RmObjList_Save();
 	void PatchList_Load();
 	void PatchList_Save();
 	void ActionReplayList_Save();

@@ -48,25 +48,8 @@ void GeometryShaderManager::Dirty()
 
 void GeometryShaderManager::SetConstants()
 {
-	if (s_projection_changed && g_ActiveConfig.iStereoMode > 0)
-	{
-		s_projection_changed = false;
+	s_projection_changed = false;
 
-		if (xfmem.projection.type == GX_PERSPECTIVE)
-		{
-			float offset = (g_ActiveConfig.iStereoDepth / 1000.0f) * (g_ActiveConfig.iStereoDepthPercentage / 100.0f);
-			constants.stereoparams[0] = g_ActiveConfig.bStereoSwapEyes ? offset : -offset;
-			constants.stereoparams[1] = g_ActiveConfig.bStereoSwapEyes ? -offset : offset;
-		}
-		else
-		{
-			constants.stereoparams[0] = constants.stereoparams[1] = 0;
-		}
-
-		constants.stereoparams[2] = (float)(g_ActiveConfig.iStereoConvergenceMinimum + g_ActiveConfig.iStereoConvergence);
-
-		dirty = true;
-	}
 
 	if (s_viewport_changed)
 	{

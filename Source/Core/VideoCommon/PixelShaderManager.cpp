@@ -14,7 +14,6 @@
 
 bool PixelShaderManager::s_bFogRangeAdjustChanged;
 bool PixelShaderManager::s_bViewPortChanged;
-
 PixelShaderConstants PixelShaderManager::constants;
 bool PixelShaderManager::dirty;
 

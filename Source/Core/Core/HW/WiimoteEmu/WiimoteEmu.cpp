@@ -1,4 +1,4 @@
-// Copyright 2013 Dolphin Emulator Project
+// Copyright 2015 Dolphin Emulator Project
 // Licensed under GPLv2
 // Refer to the license.txt file included.
 
@@ -12,6 +12,7 @@
 #include "Core/Movie.h"
 #include "Core/NetPlayClient.h"
 
+#include "Core/HW/WiimoteEmu/HydraTLayer.h"
 #include "Core/HW/WiimoteEmu/MatrixMath.h"
 #include "Core/HW/WiimoteEmu/WiimoteEmu.h"
 #include "Core/HW/WiimoteEmu/WiimoteHid.h"
@@ -21,6 +22,8 @@
 #include "Core/HW/WiimoteEmu/Attachment/Nunchuk.h"
 #include "Core/HW/WiimoteEmu/Attachment/Turntable.h"
 #include "Core/HW/WiimoteReal/WiimoteReal.h"
+
+#include "VideoCommon/OnScreenDisplay.h"
 
 namespace
 {
@@ -192,6 +195,16 @@ static const char* const named_buttons[] =
 	"A", "B", "1", "2", "-", "+", "Home",
 };
 
+bool Wiimote::GetMotionPlusAttached() const
+{
+	return m_extension->settings[0]->value != 0;
+}
+
+bool Wiimote::GetMotionPlusActive() const
+{
+	return m_reg_motion_plus.ext_identifier[2] == 0xa4;
+}
+
 void Wiimote::Reset()
 {
 	m_reporting_mode = WM_REPORT_CORE;
@@ -203,6 +216,7 @@ void Wiimote::Reset()
 	m_speaker_mute = false;
 	m_motion_plus_present = false;
 	m_motion_plus_active = false;
+	m_motion_plus_passthrough = false;
 
 	// will make the first Update() call send a status request
 	// the first call to RequestStatus() will then set up the status struct extension bit
@@ -221,6 +235,8 @@ void Wiimote::Reset()
 	memset(&m_reg_ext, 0, sizeof(m_reg_ext));
 	memset(&m_reg_motion_plus, 0, sizeof(m_reg_motion_plus));
 
+	memcpy(&m_reg_motion_plus.calibration, motion_plus_calibration, sizeof(motion_plus_calibration));
+	memcpy(&m_reg_motion_plus.gyro_calib, mp_gyro_calib, sizeof(mp_gyro_calib));
 	memcpy(&m_reg_motion_plus.ext_identifier, motion_plus_id, sizeof(motion_plus_id));
 
 	// status
@@ -277,8 +293,8 @@ Wiimote::Wiimote( const unsigned int index )
 	// extension
 	groups.emplace_back(m_extension = new Extension(_trans("Extension")));
 	m_extension->attachments.emplace_back(new WiimoteEmu::None(m_reg_ext));
-	m_extension->attachments.emplace_back(new WiimoteEmu::Nunchuk(m_reg_ext));
-	m_extension->attachments.emplace_back(new WiimoteEmu::Classic(m_reg_ext));
+	m_extension->attachments.emplace_back(new WiimoteEmu::Nunchuk(m_reg_ext, index));
+	m_extension->attachments.emplace_back(new WiimoteEmu::Classic(m_reg_ext, index));
 	m_extension->attachments.emplace_back(new WiimoteEmu::Guitar(m_reg_ext));
 	m_extension->attachments.emplace_back(new WiimoteEmu::Drums(m_reg_ext));
 	m_extension->attachments.emplace_back(new WiimoteEmu::Turntable(m_reg_ext));
@@ -318,6 +334,7 @@ bool Wiimote::Step()
 {
 	// TODO: change this a bit
 	m_motion_plus_present = m_extension->settings[0]->value != 0;
+	m_motion_plus_active = m_reg_motion_plus.ext_identifier[2] == 0xa4;
 
 	m_rumble->controls[0]->control_ref->State(m_rumble_on);
 
@@ -360,6 +377,14 @@ bool Wiimote::Step()
 
 		return true;
 	}
+	
+	// user has unplugged (unchecked) the virtual motion plus while it was active
+	if (GetMotionPlusActive() && !GetMotionPlusAttached())
+	{
+		RequestStatus(nullptr, 0);
+		if (m_extension->active_extension != 0)
+			RequestStatus();
+	}
 
 	return false;
 }
@@ -371,6 +396,12 @@ void Wiimote::UpdateButtonsStatus()
 	const bool is_sideways = m_options->settings[1]->value != 0;
 	m_buttons->GetState(&m_status.buttons.hex, button_bitmasks);
 	m_dpad->GetState(&m_status.buttons.hex, is_sideways ? dpad_sideways_bitmasks : dpad_bitmasks);
+	bool cycle_extension = false;
+	HydraTLayer::GetButtons(m_index, is_sideways, m_extension->active_extension > 0, &m_status.buttons, &cycle_extension);
+	if (cycle_extension)
+	{
+		CycleThroughExtensions();
+	}
 }
 
 void Wiimote::GetButtonData(u8* const data)
@@ -390,6 +421,10 @@ void Wiimote::GetAccelData(u8* const data, const ReportFeatures& rptf)
 	const bool is_upright = m_options->settings[2]->value != 0;
 
 	EmulateTilt(&m_accel, m_tilt, is_sideways, is_upright);
+
+	// Tilt and motion
+	HydraTLayer::GetAcceleration(m_index, is_sideways, m_extension && m_extension->active_extension > 0, &m_accel);
+
 	EmulateSwing(&m_accel, m_swing, is_sideways, is_upright);
 	EmulateShake(&m_accel, m_shake, m_shake_step);
 
@@ -469,6 +504,7 @@ void Wiimote::GetIRData(u8* const data, bool use_accel)
 	LowPassFilter(ir_cos,ncos,1.0/60);
 
 	m_ir->GetState(&xx, &yy, &zz, true);
+	HydraTLayer::GetIR(m_index, &xx, &yy, &zz);
 
 	Vertex v[4];
 
@@ -583,40 +619,69 @@ void Wiimote::GetExtData(u8* const data)
 	memcpy(m_reg_ext.controller_data, data, sizeof(wm_nc)); // TODO: Should it be nc specific?
 
 	// motionplus pass-through modes
-	if (m_motion_plus_active)
+	if (GetMotionPlusActive())
 	{
-		switch (m_reg_motion_plus.ext_identifier[0x4])
+		if (m_motion_plus_passthrough)
 		{
-		// nunchuk pass-through mode
-		// Bit 7 of byte 5 is moved to bit 6 of byte 5, overwriting it
-		// Bit 0 of byte 4 is moved to bit 7 of byte 5
-		// Bit 3 of byte 5 is moved to bit 4 of byte 5, overwriting it
-		// Bit 1 of byte 5 is moved to bit 3 of byte 5
-		// Bit 0 of byte 5 is moved to bit 2 of byte 5, overwriting it
-		case 0x5:
-			//data[5] & (1 << 7)
-			//data[4] & (1 << 0)
-			//data[5] & (1 << 3)
-			//data[5] & (1 << 1)
-			//data[5] & (1 << 0)
-			break;
+			switch (m_reg_motion_plus.ext_identifier[0x4])
+			{
+				// nunchuk pass-through mode
+				// Bit 7 of byte 5 is moved to bit 6 of byte 5, overwriting it
+				// Bit 0 of byte 4 is moved to bit 7 of byte 5
+				// Bit 3 of byte 5 is moved to bit 4 of byte 5, overwriting it
+				// Bit 1 of byte 5 is moved to bit 3 of byte 5
+				// Bit 0 of byte 5 is moved to bit 2 of byte 5, overwriting it
+			case 0x5:
+			{
+				wm_nc* nc = (wm_nc*)data;
+				// These must be assigned in the correct order to avoid clobbering data
+				nc->passthrough_data.acc_z_lsb = ((nc->az & 1) << 1) | (nc->bt.acc_z_lsb >> 1);
+				nc->passthrough_data.acc_y_lsb = nc->bt.acc_y_lsb >> 1;
+				nc->passthrough_data.acc_x_lsb = nc->bt.acc_x_lsb >> 1;
+				nc->passthrough_data.c = nc->bt.c;
+				nc->passthrough_data.z = nc->bt.z;
+			}
+				break;
 
-		// classic controller/musical instrument pass-through mode
-		// Bit 0 of Byte 4 is overwritten
-		// Bits 0 and 1 of Byte 5 are moved to bit 0 of Bytes 0 and 1, overwriting
-		case 0x7:
-			//data[4] & (1 << 0)
-			//data[5] & (1 << 0)
-			//data[5] & (1 << 1)
-			break;
+				// classic controller/musical instrument pass-through mode
+				// Bit 0 of Byte 4 is overwritten
+				// Bits 0 and 1 of Byte 5 are moved to bit 0 of Bytes 0 and 1, overwriting
+			case 0x7:
+			{
+				wm_classic_extension *cc = (wm_classic_extension *)data;
+				cc->passthrough_data.dpad_up = cc->bt.regular_data.dpad_up;
+				cc->passthrough_data.dpad_left = cc->bt.regular_data.dpad_left;
+			}
+				break;
 
-		// unknown pass-through mode
-		default:
-			break;
+				// unknown pass-through mode
+			default:
+				break;
+			}
+
+			((wm_motionplus_data*)data)->is_mp_data = 0;
+		}
+		else
+		{
+			u16 yaw_speed = 0x1F7F, pitch_speed = 0x1F7F, roll_speed = 0x1F7F;
+
+			wm_motionplus_data* mp = (wm_motionplus_data*)data;
+			mp->yaw1 = yaw_speed & 0xFF;
+			mp->yaw2 = ((yaw_speed >> 8) & 0x3f);
+			mp->roll1 = roll_speed & 0xFF;
+			mp->roll2 = ((yaw_speed >> 8) & 0x3f);
+			mp->pitch1 = pitch_speed & 0xFF;
+			mp->pitch2 = ((yaw_speed >> 8) & 0x3f);
+			mp->yaw_slow = 1;
+			mp->roll_slow = 1;
+			mp->pitch_slow = 1;
+
+			mp->is_mp_data = 1;
 		}
 
-		((wm_motionplus_data*)data)->is_mp_data = 0;
-		((wm_motionplus_data*)data)->extension_connected = m_extension->active_extension;
+		((wm_motionplus_data*)data)->zero = 0;
+		((wm_motionplus_data*)data)->extension_connected = (m_extension->active_extension > 0);
+		m_motion_plus_passthrough = !m_motion_plus_passthrough;
 	}
 
 	if (0xAA == m_reg_ext.encryption)
@@ -753,7 +818,7 @@ void Wiimote::Update()
 			m_status.buttons = *(wm_buttons*)(data + rptf.core);
 	}
 
-	Movie::CheckWiimoteStatus(m_index, data, rptf, m_extension->active_extension, m_ext_key);
+		Movie::CheckWiimoteStatus(m_index, data, rptf, m_extension->active_extension, m_ext_key);
 
 	// don't send a data report if auto reporting is off
 	if (false == m_reporting_auto && data[2] >= WM_REPORT_CORE)
@@ -929,6 +994,55 @@ void Wiimote::LoadDefaults(const ControllerInterface& ciface)
 
 	// set nunchuk defaults
 	m_extension->attachments[1]->LoadDefaults(ciface);
+}
+
+// Switch between Wiimote, Sideways Wiimote, Wiimote+Nunchuk, Wiimote+Classic.
+void Wiimote::CycleThroughExtensions()
+{
+	switch (m_extension->active_extension)
+	{
+	case -1:
+		// special temporary flag, don't change it
+		break;
+	case 0:
+		// if vertical Wiimote, switch to Wiimote
+		if (m_options->settings[2]->value != 0)
+		{
+			m_extension->switch_extension = 0;
+			m_options->settings[1]->value = 0;
+			m_options->settings[2]->value = 0;
+			OSD::AddMessage("Controller: Wiimote", 5000);
+		}
+		// if Wiimote, switch to sideways Wiimote
+		else if (m_options->settings[1]->value == 0)
+		{
+			m_extension->switch_extension = 0;
+			m_options->settings[1]->value = 1;
+			m_options->settings[2]->value = 0;
+			OSD::AddMessage("Controller: Sideways Wiimote", 5000);
+		}
+		// if Sideways Wiimote, switch to Wiimote+Nunchuk (not sideways)
+		else
+		{
+			m_extension->switch_extension = 1;
+			m_options->settings[1]->value = 0;
+			m_options->settings[2]->value = 0;
+			OSD::AddMessage("Controller: Wiimote + Nunchuk", 5000);
+		}
+		break;
+	case 1:
+		// if Wiimote+Nunchuk, switch to Wiimote+Classic		
+		m_extension->switch_extension = 2;
+		OSD::AddMessage("Controller: Classic Controller", 5000);
+		break;
+	default:
+		// if anything else (Wiimote+Classic, guitar, drums, etc.) switch to Wiimote (not sideways)
+		m_extension->switch_extension = 0;
+		m_options->settings[1]->value = 0;
+		m_options->settings[2]->value = 0;
+		OSD::AddMessage("Controller: Wiimote", 5000);
+		break;
+	}
 }
 
 }

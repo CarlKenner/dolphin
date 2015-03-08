@@ -14,6 +14,7 @@
 
 #include "Common/CommonTypes.h"
 #include "Common/CPUDetect.h"
+#include "Core/ConfigManager.h"
 #include "Core/Core.h"
 #include "Core/Host.h"
 #include "Core/FifoPlayer/FifoRecorder.h"
@@ -29,6 +30,7 @@
 #include "VideoCommon/VertexLoaderManager.h"
 #include "VideoCommon/VideoCommon.h"
 #include "VideoCommon/VideoConfig.h"
+#include "VideoCommon/VR.h"
 #include "VideoCommon/XFMemory.h"
 
 
@@ -51,7 +53,7 @@ static u32 InterpretDisplayList(u32 address, u32 size)
 		// temporarily swap dl and non-dl (small "hack" for the stats)
 		Statistics::SwapDL();
 
-		OpcodeDecoder_Run(DataReader(startAddress, startAddress + size), &cycles, true);
+		OpcodeDecoder_Run(DataReader(startAddress, startAddress + size), &cycles, true, true);
 		INCSTAT(stats.thisFrame.numDListsCalled);
 
 		// un-swap
@@ -69,24 +71,29 @@ static void InterpretDisplayListPreprocess(u32 address, u32 size)
 
 	if (startAddress != nullptr)
 	{
-		OpcodeDecoder_Run<true>(DataReader(startAddress, startAddress + size), nullptr, true);
+		OpcodeDecoder_Run<true>(DataReader(startAddress, startAddress + size), nullptr, true, true);
 	}
 }
 
-static void UnknownOpcode(u8 cmd_byte, void *buffer, bool preprocess)
+static void UnknownOpcode(u8 cmd_byte, void *buffer, bool preprocess, bool g_opcodereplay_frame, bool in_display_list, bool recursive_call)
 {
 	// TODO(Omega): Maybe dump FIFO to file on this error
 	PanicAlert(
 	    "GFX FIFO: Unknown Opcode (0x%x @ %p, preprocessing=%s).\n"
 	    "This means one of the following:\n"
+		"* The opcode replay buffer is enabled, which is currently buggy\n"
 	    "* The emulated GPU got desynced, disabling dual core can help\n"
 	    "* Command stream corrupted by some spurious memory bug\n"
 	    "* This really is an unknown opcode (unlikely)\n"
 	    "* Some other sort of bug\n\n"
-	    "Dolphin will now likely crash or hang. Enjoy." ,
+	    "Dolphin will now likely crash or hang. \n"
+		"(timewarped_frame = %s, in_display_list=%s, recursive_call = %s).\n",
 	    cmd_byte,
 	    buffer,
-	    preprocess ? "yes" : "no");
+	    preprocess ? "yes" : "no",
+		g_opcodereplay_frame ? "yes" : "no",
+		in_display_list ? "yes" : "no",
+		recursive_call ? "yes" : "no");
 
 	{
 		SCPFifoStruct &fifo = CommandProcessor::fifo;
@@ -123,18 +130,75 @@ static void UnknownOpcode(u8 cmd_byte, void *buffer, bool preprocess)
 
 void OpcodeDecoder_Init()
 {
+	if (g_has_hmd)
+	{
+		opcode_replay_enabled = ((g_ActiveConfig.iExtraVideoLoops || g_ActiveConfig.bPullUp20fps || g_ActiveConfig.bPullUp30fps || g_ActiveConfig.bPullUp60fps) && !(g_ActiveConfig.bPullUp20fpsTimewarp || g_ActiveConfig.bPullUp30fpsTimewarp || g_ActiveConfig.bPullUp60fpsTimewarp) && SConfig::GetInstance().m_LocalCoreStartupParameter.m_GPUDeterminismMode != GPU_DETERMINISM_FAKE_COMPLETION);
+		g_opcodereplay_frame = !opcode_replay_enabled; // Don't log frames if not enabled
+	}
 }
 
 
 void OpcodeDecoder_Shutdown()
 {
+	if (g_has_hmd)
+	{
+		g_opcodereplay_frame = true;
+		is_preprocess_log.clear();
+		is_preprocess_log.resize(0);
+		timewarp_log.clear();
+		timewarp_log.resize(0);
+		display_list_log.clear();
+		display_list_log.resize(0);
+	}
 }
 
 template <bool is_preprocess>
-u8* OpcodeDecoder_Run(DataReader src, u32* cycles, bool in_display_list)
+u8* OpcodeDecoder_Run(DataReader src, u32* cycles, bool in_display_list, bool recursive_call)
 {
 	u32 totalCycles = 0;
 	u8* opcodeStart;
+
+	//if (((u32)(src.buffer) >= 0x92700000) && ((u32)(src.buffer) <= 0x9281FFFF))
+	//if (((u32)(src.buffer) == 0x9281F7AD)) //Doesn't work?
+	//if (((u32)(src.end) == 0x92e4d640))
+	//{
+	//	PanicAlert(
+	//		"Loop: (0x%x, 0x%x, timewarped_frame = %s, in_display_list=%s, recursive_call = %s).\n",
+	//		src.buffer,
+	//		src.end,
+	//		g_opcodereplay_frame ? "yes" : "no",
+	//		in_display_list ? "yes" : "no",
+	//		recursive_call ? "yes" : "no"
+	//		);
+	//}
+
+	if (opcode_replay_enabled && !g_opcodereplay_frame && g_has_hmd && !recursive_call && (skipped_opcode_replay_count >= (int)g_ActiveConfig.iExtraVideoLoopsDivider))
+	{
+		timewarp_log.push_back(src);
+		display_list_log.push_back(in_display_list);
+		is_preprocess_log.push_back(is_preprocess);
+
+		//s_pCurBufferPointer_log.push_back(VertexManager::s_pCurBufferPointer);
+		//s_pEndBufferPointer_log.push_back(VertexManager::s_pEndBufferPointer);
+		//s_pBaseBufferPointer_log.push_back(VertexManager::s_pBaseBufferPointer);
+
+		//if (CPBase_log.size() < 1)
+		//{
+			//SCPFifoStruct &fifo = CommandProcessor::fifo;
+
+			//CPBase_log.push_back((u32)fifo.CPBase);
+			//CPEnd_log.push_back((u32)fifo.CPEnd);
+			//CPHiWatermark_log.push_back(fifo.CPHiWatermark);
+			//CPLoWatermark_log.push_back(fifo.CPLoWatermark);
+			//CPReadWriteDistance_log.push_back((u32)fifo.CPReadWriteDistance);
+			//CPWritePointer_log.push_back((u32)fifo.CPWritePointer);
+			//CPReadPointer_log.push_back((u32)fifo.CPReadPointer);
+			//CPBreakpoint_log.push_back((u32)fifo.CPBreakpoint);
+		//}
+
+
+	}
+
 	while (true)
 	{
 		opcodeStart = src.GetPointer();
@@ -265,35 +329,28 @@ u8* OpcodeDecoder_Run(DataReader src, u32* cycles, bool in_display_list)
 				if (src.size() < 2)
 					goto end;
 				u16 num_vertices = src.Read<u16>();
+				int bytes = VertexLoaderManager::RunVertices(
+					cmd_byte & GX_VAT_MASK,   // Vertex loader index (0 - 7)
+					(cmd_byte & GX_PRIMITIVE_MASK) >> GX_PRIMITIVE_SHIFT,
+					num_vertices,
+					src,
+					g_bSkipCurrentFrame,
+					is_preprocess);
 
-				if (is_preprocess)
-				{
-					size_t size = num_vertices * VertexLoaderManager::GetVertexSize(cmd_byte & GX_VAT_MASK, is_preprocess);
-					if (src.size() < size)
-						goto end;
-					src.Skip(size);
-				}
-				else
-				{
-					int bytes = VertexLoaderManager::RunVertices(
-						cmd_byte & GX_VAT_MASK,   // Vertex loader index (0 - 7)
-						(cmd_byte & GX_PRIMITIVE_MASK) >> GX_PRIMITIVE_SHIFT,
-						num_vertices,
-						src,
-						g_bSkipCurrentFrame);
+				if (bytes < 0)
+					goto end;
 
-					if (bytes < 0)
-						goto end;
-					else
-						src.Skip(bytes);
-				}
+				src.Skip(bytes);
 
 				// 4 GPU ticks per vertex, 3 CPU ticks per GPU tick
 				totalCycles += num_vertices * 4 * 3 + 6;
 			}
 			else
 			{
-				UnknownOpcode(cmd_byte, opcodeStart, is_preprocess);
+				if (!g_ActiveConfig.bOpcodeWarningDisable)
+				{
+					UnknownOpcode(cmd_byte, opcodeStart, is_preprocess, g_opcodereplay_frame, in_display_list, recursive_call);
+				}
 				totalCycles += 1;
 			}
 			break;
@@ -316,5 +373,5 @@ end:
 	return opcodeStart;
 }
 
-template u8* OpcodeDecoder_Run<true>(DataReader src, u32* cycles, bool in_display_list);
-template u8* OpcodeDecoder_Run<false>(DataReader src, u32* cycles, bool in_display_list);
+template u8* OpcodeDecoder_Run<true>(DataReader src, u32* cycles, bool in_display_list, bool recursive_call = false);
+template u8* OpcodeDecoder_Run<false>(DataReader src, u32* cycles, bool in_display_list, bool recursive_call = false);

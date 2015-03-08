@@ -1,4 +1,4 @@
-// Copyright 2013 Dolphin Emulator Project
+// Copyright 2014 Dolphin Emulator Project
 // Licensed under GPLv2
 // Refer to the license.txt file included.
 
@@ -72,6 +72,24 @@ private:
 };
 
 typedef IntegerSetting<u32> U32Setting;
+
+template <typename T>
+class FloatSetting : public wxSpinCtrlDouble
+{
+public:
+	FloatSetting(wxWindow* parent, const wxString& label, T& setting, T minVal, T maxVal, T increment = 0, long style = 0);
+
+	void UpdateValue(wxSpinDoubleEvent& ev)
+	{
+		m_setting = ev.GetValue();
+		ev.Skip();
+	}
+private:
+	T& m_setting;
+};
+
+typedef FloatSetting<double> SettingDouble;
+typedef FloatSetting<float> SettingNumber;
 
 class SettingChoice : public wxChoice
 {
@@ -191,6 +209,7 @@ protected:
 	}
 
 	void Event_ClickClose(wxCommandEvent&);
+	void Event_ClickSave(wxCommandEvent&);
 	void Event_Close(wxCloseEvent&);
 
 	// Enables/disables UI elements depending on current config
@@ -201,6 +220,7 @@ protected:
 		text_aamode->Enable(vconfig.backend_info.AAModes.size() > 1);
 
 		// EFB copy
+		efbcopy_clear_disable->Enable(!vconfig.bEFBCopyEnable);
 		efbcopy_texture->Enable(vconfig.bEFBCopyEnable);
 		efbcopy_ram->Enable(vconfig.bEFBCopyEnable);
 
@@ -242,6 +262,7 @@ protected:
 	SettingCheckBox* CreateCheckBox(wxWindow* parent, const wxString& label, const wxString& description, bool &setting, bool reverse = false, long style = 0);
 	SettingChoice* CreateChoice(wxWindow* parent, int& setting, const wxString& description, int num = 0, const wxString choices[] = nullptr, long style = 0);
 	SettingRadioButton* CreateRadioButton(wxWindow* parent, const wxString& label, const wxString& description, bool &setting, bool reverse = false, long style = 0);
+	SettingNumber* CreateNumber(wxWindow* parent, float &setting, const wxString& description, float min, float max, float inc, long style = 0);
 
 	// Same as above but only connects enter/leave window events
 	wxControl* RegisterControl(wxControl* const control, const wxString& description);
@@ -267,6 +288,8 @@ protected:
 
 	SettingCheckBox* borderless_fullscreen;
 	SettingCheckBox* render_to_main_checkbox;
+	SettingCheckBox* async_timewarp_checkbox;
+	SettingCheckBox* efbcopy_clear_disable;
 
 	SettingRadioButton* efbcopy_texture;
 	SettingRadioButton* efbcopy_ram;
@@ -284,3 +307,48 @@ protected:
 	VideoConfig &vconfig;
 	std::string ininame;
 };
+
+static wxString async_desc = wxTRANSLATE("Render head rotation updates in a separate thread at full frame rate using Timewarp even when the game runs at a lower frame rate.");
+static wxString temp_desc = wxTRANSLATE("Game specific VR option, in metres or degrees");
+static wxString minfov_desc = wxTRANSLATE("Minimum horizontal degrees of your view that the action will fill.\nWhen the game tries to render from a distance with a zoom lens, this will move thhe camera closer instead. When the FOV is less than the minimum the camera will move forward until objects at Aim Distance fill the minimum FOV.\nIf unsure, leave this at 10 degrees.");
+static wxString scale_desc = wxTRANSLATE("(Don't change this until the game's Units Per Metre setting is already lifesize!)\n\nScale multiplier for all VR worlds.\n1x = lifesize, 2x = Giant size\n0.5x = Child size, 0.17x = Barbie doll size, 0.02x = Lego size\n\nIf unsure, use 1.00.");
+static wxString lean_desc = wxTRANSLATE("How many degrees leaning back should count as vertical.\n0 = sitting/standing, 45 = reclining\n90 = playing lying on your back, -90 = on your front\n\nIf unsure, use 0.");
+static wxString extraframes_desc = wxTRANSLATE("How many extra frames to render via timewarp.  Set to 0 for 60fps games, 1 for 30fps games, 2 for 20fps games and the framelimiter to your Rift's refresh rate.  For 25fps PAL games, set to 2 and set the frame limiter to 60 (assuming the Rift's refresh rate is set to 75hz).  If unsure, use 0.");
+static wxString replaybuffer_desc = wxTRANSLATE("How many extra frames to render through replaying the video loop.  Set to 0 for 60fps games, 1 for 30fps games, 2 for 20fps games and the framelimiter to your Rift's refresh rate.  For 25fps PAL games, set to 2 and set the frame limiter to 60 (assuming the Rift's refresh rate is set to 75hz).  If unsure, use 0.");
+static wxString pullup20_desc = wxTRANSLATE("Make headtracking work at 75fps for a 20fps game. Enable this on 20fps games to fix judder.\nIf unsure, leave this unchecked.");
+static wxString pullup30_desc = wxTRANSLATE("Make headtracking work at 75fps for a 30fps game. Enable this on 30fps games to fix judder.\nIf unsure, leave this unchecked.");
+static wxString pullup60_desc = wxTRANSLATE("Make headtracking work at 75fps for a 60fps game. Enable this on 60fps games to fix judder.\nIf unsure, leave this unchecked.");
+static wxString opcodewarning_desc = wxTRANSLATE("Turn off Opcode Warnings.  Will ignore errors in the Opcode Replay Buffer, allowing many games with minor problems to be played.  This should be turned on if trying to play a game with Opcode Replay enabled. Once all the bugs in the Opcode Buffer are fixed, this option will be removed!");
+static wxString pullup20timewarp_desc = wxTRANSLATE("Timewarp headtracking up to 75fps for a 20fps game. Enable this on 20fps games to timewarp the headtracking to 75fps.\nIf unsure, leave this unchecked.");
+static wxString pullup30timewarp_desc = wxTRANSLATE("Timewarp headtracking up to 75fps for a 30fps game. Enable this on 30fps games to timewarp the headtracking to 75fps.\nIf unsure, leave this unchecked.");
+static wxString pullup60timewarp_desc = wxTRANSLATE("Timewarp headtracking up to 75fps for a 60fps game. Enable this on 60fps games to timewarp the headtracking to 75fps.\nIf unsure, leave this unchecked.");
+static wxString timewarptweak_desc = wxTRANSLATE("How long before the expected Vsync the timewarped frame should be injected. Ideally this value should zero, but some configurations may benefit from an earlier injection.  Only used if 'Extra Timewarped Frames' is non-zero. If unsure, set this to 0.");
+static wxString enablevr_desc = wxTRANSLATE("Enable Virtual Reality (if your HMD was detected when you started Dolphin).\n\nIf unsure, leave this checked.");
+static wxString player_desc = wxTRANSLATE("During split-screen games, which player is wearing the Oculus Rift?\nPlayer 1 is top left, player 2 is top right, player 3 is bottom left, player 4 is bottom right.\nThe player in the Rift will only see their player's view.\n\nIf unsure, say Player 1.");
+static wxString lowpersistence_desc = wxTRANSLATE("Use low persistence on DK2 to reduce motion blur when turning your head.\n\nIf unsure, leave this checked.");
+static wxString dynamicpred_desc = wxTRANSLATE("\"Adjust prediction dynamically based on internally measured latency.\"\n\nIf unsure, leave this checked.");
+static wxString nomirrortowindow_desc = wxTRANSLATE("Disable the mirrored window in direct mode.  Current tests show better performance with this unchecked and the mirrored window resized to 0 pixels by 0 pixels. Leave this unchecked.");
+static wxString orientation_desc = wxTRANSLATE("Use orientation tracking.\n\nLeave this checked.");
+static wxString magyaw_desc = wxTRANSLATE("Use the Rift's magnetometers to prevent yaw drift when out of camera range.\n\nIf unsure, leave this checked.");
+static wxString position_desc = wxTRANSLATE("Use position tracking (both from camera and head/neck model).\n\nLeave this checked.");
+static wxString chromatic_desc = wxTRANSLATE("Use chromatic aberration correction to prevent red and blue fringes at the edges of objects.\n\nIf unsure, leave this checked.");
+static wxString timewarp_desc = wxTRANSLATE("Shift the warped display after rendering to correct for head movement during rendering.\n\nIf unsure, leave this checked.");
+static wxString vignette_desc = wxTRANSLATE("Fade out the edges of the screen to make the screen sides look less harsh.\nNot needed on DK1.\n\nIf unsure, leave this unchecked.");
+static wxString norestore_desc = wxTRANSLATE("Tell the Oculus SDK not to restore OpenGL state.\n\nIf unsure, leave this unchecked.");
+static wxString flipvertical_desc = wxTRANSLATE("Flip the screen vertically.\n\nIf unsure, leave this unchecked.");
+static wxString srgb_desc = wxTRANSLATE("\"Assume input images are in sRGB gamma-corrected color space.\"\n\nIf unsure, leave this unchecked.");
+static wxString overdrive_desc = wxTRANSLATE("Try to fix true black smearing by overdriving brightness transitions.\n\nIf unsure, leave this unchecked.");
+static wxString hqdistortion_desc = wxTRANSLATE("\"High-quality sampling of distortion buffer for anti-aliasing\".\n\nIf unsure, leave this unchecked.");
+static wxString hudontop_desc = wxTRANSLATE("Always draw the HUD on top of everything else.\nUse this when you can't see the HUD because the world is covering it up.\n\nIf unsure, leave this unchecked.");
+static wxString nearclip_desc = wxTRANSLATE("Always draw things which are close to (or far from) the camera.\nThis fixes the problem of things disappearing when you move your head close.\nThere can still be problems when two objects are in front of the near clipping plane, if they are drawn in the wrong order.\n\nIf unsure, leave this checked.");
+static wxString showcontroller_desc = wxTRANSLATE("Show the razer hydra, wiimote, or gamecube controller inside the game world.\n\nIf unsure, leave this unchecked.");
+static wxString showhands_desc = wxTRANSLATE("Show your hands inside the game world.\n\nIf unsure, leave this unchecked.");
+static wxString showfeet_desc = wxTRANSLATE("Show your feet inside the game world.\nBased on your height in Oculus Configuration Utility.\n\nIf unsure, leave this unchecked.");
+static wxString showgamecamera_desc = wxTRANSLATE("Show the location of the game's camera inside the game world.\nNormally this will be where your head is unless you move your head.\n\nIf unsure, leave this unchecked.");
+static wxString showgamecamerafrustum_desc = wxTRANSLATE("Show the pyramid coming out of the game camera representing what the game thinks you can see.\n\nIf unsure, leave this unchecked.");
+static wxString showsensorbar_desc = wxTRANSLATE("Show the virtual or real sensor bar inside the game world.\n\nIf unsure, leave this unchecked.");
+static wxString showtrackingcamera_desc = wxTRANSLATE("Show the Oculus Rift tracking camera inside the game world.\n\nIf unsure, leave this unchecked.");
+static wxString showtrackingvolume_desc = wxTRANSLATE("Show the pyramid coming out of the Rift's tracking camera representing where your head can be tracked.\n\nIf unsure, leave this unchecked.");
+static wxString showbasestation_desc = wxTRANSLATE("Show the Razer Hydra base station inside the game world.\n\nIf unsure, leave this unchecked.");
+static wxString hideskybox_desc = wxTRANSLATE("Don't draw the background or sky in some games.\nThat may reduce motion sickness by reducing vection in your periphery. But most games won't look as good.\n\nIf unsure, leave this unchecked.");
+static wxString lockskybox_desc = wxTRANSLATE("Lock the game's background or sky to the real world in some games.\nTurning in-game will rotate the level but not the background. Oculus suggested this at Connect. It will reduce motion sickness at the cost of decreased immersion.\n\nIf unsure, leave this unchecked.");

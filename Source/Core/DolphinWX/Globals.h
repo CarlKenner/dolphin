@@ -1,4 +1,4 @@
-// Copyright 2013 Dolphin Emulator Project
+// Copyright 2014 Dolphin Emulator Project
 // Licensed under GPLv2
 // Refer to the license.txt file included.
 
@@ -115,6 +115,7 @@ enum
 	IDM_MENU_INSTALL_WAD,
 	IDM_LIST_INSTALL_WAD,
 	IDM_FIFOPLAYER,
+	IDM_DEBUGGER,
 	IDM_CONNECT_WIIMOTE1,
 	IDM_CONNECT_WIIMOTE2,
 	IDM_CONNECT_WIIMOTE3,
@@ -148,6 +149,7 @@ enum
 	IDM_CONFIG_GFX_BACKEND,
 	IDM_CONFIG_AUDIO,
 	IDM_CONFIG_CONTROLLERS,
+	IDM_CONFIG_VR,
 	IDM_CONFIG_HOTKEYS,
 	IDM_CONFIG_LOGGER,
 

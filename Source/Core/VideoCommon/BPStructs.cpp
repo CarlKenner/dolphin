@@ -1,4 +1,4 @@
-// Copyright 2013 Dolphin Emulator Project
+// Copyright 2014 Dolphin Emulator Project
 // Licensed under GPLv2
 // Refer to the license.txt file included.
 
@@ -23,7 +23,9 @@
 #include "VideoCommon/TextureDecoder.h"
 #include "VideoCommon/VertexShaderManager.h"
 #include "VideoCommon/VideoCommon.h"
-#include "VideoCommon/VideoConfig.h"
+#include "VideoCommon/VR.h"
+
+#define HACK_LOG INFO_LOG
 
 using namespace BPFunctions;
 
@@ -124,8 +126,8 @@ static void BPWritten(const BPCmd& bp)
 	case BPMEM_SCISSORBR: // Scissor Rectable Bottom, Right
 	case BPMEM_SCISSOROFFSET: // Scissor Offset
 		SetScissor();
-		VertexShaderManager::SetViewportChanged();
 		GeometryShaderManager::SetViewportChanged();
+		VertexShaderManager::SetViewportChanged();
 		return;
 	case BPMEM_LINEPTWIDTH: // Line Width
 		GeometryShaderManager::SetLinePtWidthChanged();
@@ -204,6 +206,8 @@ static void BPWritten(const BPCmd& bp)
 			// The bottom right is within the rectangle
 			// The values in bpmem.copyTexSrcXY and bpmem.copyTexSrcWH are updated in case 0x49 and 0x4a in this function
 
+			bool new_frame_just_rendered = false;
+
 			u32 destAddr = bpmem.copyTexDest << 5;
 
 			EFBRectangle srcRect;
@@ -222,7 +226,30 @@ static void BPWritten(const BPCmd& bp)
 			{
 				if (g_ActiveConfig.bShowEFBCopyRegions)
 					stats.efb_regions.push_back(srcRect);
-
+				// In VR we normally render to the whole screen instead of the viewport, 
+				// (except when rendering to a square texture in the corner)
+				// So we want to copy a fraction of the whole screen, instead of a fraction of the viewport.
+				// Currently this will only work will copying the EFB to a texture.
+				if (g_has_hmd && g_viewport_type != VIEW_RENDER_TO_TEXTURE && !(g_rendered_viewport==g_requested_viewport) 
+					&& g_ActiveConfig.bEnableVR && g_ActiveConfig.bCopyEFBToTexture)
+				{
+					if (debug_newScene)
+						HACK_LOG(VR, "VR Resized EFB Copy (%d, %d) %dx%d to %8x, %d, %d, %d, %d", 
+							srcRect.left, srcRect.top, srcRect.GetWidth(), srcRect.GetHeight(), destAddr,
+							PE_copy.tp_realFormat(), bpmem.zcontrol.pixel_format,
+							!!PE_copy.intensity_fmt, !!PE_copy.half_scale);
+					ScaleRequestedToRendered(&srcRect);
+					if (debug_newScene)
+						HACK_LOG(VR, "    Resized to (%d, %d) %dx%d", srcRect.left, srcRect.top, srcRect.GetWidth(), srcRect.GetHeight());
+				}
+				else
+				{
+					if (debug_newScene)
+						HACK_LOG(VR, "Render to Texture EFB Copy (%d, %d) %dx%d to %8x, %d, %d, %d, %d", 
+							srcRect.left, srcRect.top, srcRect.GetWidth(), srcRect.GetHeight(), destAddr,
+							PE_copy.tp_realFormat(), bpmem.zcontrol.pixel_format,
+							!!PE_copy.intensity_fmt, !!PE_copy.half_scale);
+				}
 				CopyEFB(destAddr, srcRect,
 					PE_copy.tp_realFormat(), bpmem.zcontrol.pixel_format,
 					!!PE_copy.intensity_fmt, !!PE_copy.half_scale);
@@ -254,12 +281,19 @@ static void BPWritten(const BPCmd& bp)
 				u32 width = bpmem.copyMipMapStrideChannels << 4;
 
 				Renderer::RenderToXFB(destAddr, srcRect, width, height, s_gammaLUT[PE_copy.gamma]);
+				new_frame_just_rendered = true;
 			}
 
 			// Clear the rectangular region after copying it.
 			if (PE_copy.clear)
 			{
-				ClearScreen(srcRect);
+				ClearScreen(srcRect, new_frame_just_rendered);
+			}
+
+			//Render Extra Headtracking Frames for VR.
+			if (new_frame_just_rendered && g_has_hmd)
+			{
+				OpcodeReplayBuffer();
 			}
 
 			return;

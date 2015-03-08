@@ -1,4 +1,4 @@
-// Copyright 2013 Dolphin Emulator Project
+// Copyright 2015 Dolphin Emulator Project
 // Licensed under GPLv2
 // Refer to the license.txt file included.
 
@@ -6,6 +6,7 @@
 
 #include "d3d11.h"
 
+#include "VideoBackends/D3D/AvatarDrawer.h"
 #include "VideoBackends/D3D/D3DTexture.h"
 #include "VideoCommon/FramebufferManagerBase.h"
 
@@ -79,12 +80,19 @@ public:
 		m_efb.color_tex = swaptex;
 	}
 
+	static void SwapAsyncFrontBuffers();
+
+	//static volatile GLuint m_frontBuffer[2];
+	static bool m_stereo3d;
+	static int m_eye_count;
+
 private:
 	XFBSourceBase* CreateXFBSource(unsigned int target_width, unsigned int target_height, unsigned int layers) override;
 	void GetTargetSize(unsigned int *width, unsigned int *height) override;
 
 	void CopyToRealXFB(u32 xfbAddr, u32 fbWidth, u32 fbHeight, const EFBRectangle& sourceRc,float Gamma) override;
 
+public:
 	static struct Efb
 	{
 		D3DTexture2D* color_tex;
@@ -99,11 +107,15 @@ private:
 		D3DTexture2D* resolved_color_tex;
 		D3DTexture2D* resolved_depth_tex;
 
+		D3DTexture2D* m_frontBuffer[2];
+
 		int slices;
 	} m_efb;
 
 	static unsigned int m_target_width;
 	static unsigned int m_target_height;
 };
+
+extern AvatarDrawer s_avatarDrawer;
 
 }  // namespace DX11

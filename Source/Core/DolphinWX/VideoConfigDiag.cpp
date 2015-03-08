@@ -39,6 +39,7 @@
 #include "VideoCommon/PostProcessing.h"
 #include "VideoCommon/VideoBackendBase.h"
 #include "VideoCommon/VideoConfig.h"
+#include "VideoCommon/VR.h"
 
 #ifdef __APPLE__
 #include <ApplicationServices/ApplicationServices.h>
@@ -70,6 +71,16 @@ SettingRadioButton::BoolSetting(wxWindow* parent, const wxString& label, const w
 	Bind(wxEVT_RADIOBUTTON, &SettingRadioButton::UpdateValue, this);
 }
 
+template <typename T>
+FloatSetting<T>::FloatSetting(wxWindow* parent, const wxString& label, T& setting, T minVal, T maxVal, T increment, long style) :
+wxSpinCtrlDouble(parent, -1, label, wxDefaultPosition, wxDefaultSize, style, minVal, maxVal, setting, increment),
+m_setting(setting)
+{
+	SetValue(m_setting);
+	Bind(wxEVT_SPINCTRLDOUBLE, &FloatSetting::UpdateValue, this);
+}
+
+
 SettingChoice::SettingChoice(wxWindow* parent, int &setting, const wxString& tooltip, int num, const wxString choices[], long style)
 	: wxChoice(parent, wxID_ANY, wxDefaultPosition, wxDefaultSize, num, choices)
 	, m_setting(setting)
@@ -88,6 +99,12 @@ void SettingChoice::UpdateValue(wxCommandEvent& ev)
 void VideoConfigDiag::Event_ClickClose(wxCommandEvent&)
 {
 	Close();
+}
+
+void VideoConfigDiag::Event_ClickSave(wxCommandEvent&)
+{
+	if (SConfig::GetInstance().m_LocalCoreStartupParameter.m_strGameIniLocal != "")
+		g_Config.GameIniSave();
 }
 
 void VideoConfigDiag::Event_Close(wxCloseEvent& ev)
@@ -124,6 +141,7 @@ static wxString internal_res_desc = wxTRANSLATE("Specifies the resolution used t
 static wxString efb_access_desc = wxTRANSLATE("Ignore any requests from the CPU to read from or write to the EFB.\nImproves performance in some games, but might disable some gameplay-related features or graphical effects.\n\nIf unsure, leave this unchecked.");
 static wxString efb_emulate_format_changes_desc = wxTRANSLATE("Ignore any changes to the EFB format.\nImproves performance in many games without any negative effect. Causes graphical defects in a small number of other games.\n\nIf unsure, leave this checked.");
 static wxString efb_copy_desc = wxTRANSLATE("Disable emulation of EFB copies.\nThese are often used for post-processing or render-to-texture effects, so while checking this setting may give a minor speedup over EFB to Texture it almost invariably also causes issues.\n\nIf unsure, leave this unchecked.");
+static wxString efb_copy_clear_desc = wxTRANSLATE("Disables the black box that appears where an EFB copy should have been rendered.  Use only if you are seeing a black box after disabling EFB copies, or a game is not rendering properly.  May cause artifacts such as bad blending on shadows.\nIf unsure, leave this unchecked.");
 static wxString efb_copy_texture_desc = wxTRANSLATE("Store EFB copies in GPU texture objects.\nThis isn't particularly accurate, but it works well enough for most games and gives a great speedup over EFB to RAM.\n\nIf unsure, leave this checked.");
 static wxString efb_copy_ram_desc = wxTRANSLATE("Accurately emulate EFB copies.\nNumerous games depend on this for certain graphical effects or gameplay functionality.\nThis is much slower than EFB to Texture.\n\nIf unsure, check EFB to Texture instead.");
 static wxString stc_desc = wxTRANSLATE("The \"Safe\" setting eliminates the likelihood of the GPU missing texture updates from RAM.\nLower accuracies cause in-game text to appear garbled in certain games.\n\nIf unsure, use the rightmost value.");
@@ -144,7 +162,7 @@ static wxString dump_efb_desc = wxTRANSLATE("Dump the contents of EFB copies to 
 #if !defined WIN32 && defined HAVE_LIBAV
 static wxString use_ffv1_desc = wxTRANSLATE("Encode frame dumps using the FFV1 codec.\n\nIf unsure, leave this unchecked.");
 #endif
-static wxString free_look_desc = wxTRANSLATE("This feature allows you to change the game's camera.\nMove the mouse while holding the right mouse button to pan and while holding the middle button to move.\nHold SHIFT and press one of the WASD keys to move the camera by a certain step distance (SHIFT+2 to move faster and SHIFT+1 to move slower). Press SHIFT+R to reset the camera and SHIFT+F to reset the speed.\n\nIf unsure, leave this unchecked.");
+static wxString free_look_desc = wxTRANSLATE("This feature allows you to change the game's camera with the mouse.\nMove the mouse while holding the right mouse button to pan and while holding the middle button to move.\n\nIf unsure, leave this unchecked.");
 static wxString crop_desc = wxTRANSLATE("Crop the picture from 4:3 to 5:4 or from 16:9 to 16:10.\n\nIf unsure, leave this unchecked.");
 static wxString ppshader_desc = wxTRANSLATE("Apply a post-processing effect after finishing a frame.\n\nIf unsure, select (off).");
 static wxString cache_efb_copies_desc = wxTRANSLATE("Slightly speeds up EFB to RAM copies by sacrificing emulation accuracy.\nIf you're experiencing any issues, try raising texture cache accuracy or disable this option.\n\nIf unsure, leave this unchecked.");
@@ -155,18 +173,20 @@ static wxString stereo_swap_desc = wxTRANSLATE("Swaps the left and right eye. Mo
 
 #if !defined(__APPLE__)
 // Search for available resolutions - TODO: Move to Common?
+// No, now it depends on VR to know which display to check, so don't move it to Common.
+// g_hmd_device_name will be nullptr unless there is a VR display attached.
 static wxArrayString GetListOfResolutions()
 {
 	wxArrayString retlist;
 	retlist.Add("Auto");
 #ifdef _WIN32
 	DWORD iModeNum = 0;
-	DEVMODE dmi;
+	DEVMODEA dmi;
 	ZeroMemory(&dmi, sizeof(dmi));
 	dmi.dmSize = sizeof(dmi);
 	std::vector<std::string> resos;
 
-	while (EnumDisplaySettings(nullptr, iModeNum++, &dmi) != 0)
+	while (EnumDisplaySettingsA(g_hmd_device_name, iModeNum++, &dmi) != 0)
 	{
 		char res[100];
 		sprintf(res, "%dx%d", dmi.dmPelsWidth, dmi.dmPelsHeight);
@@ -177,7 +197,6 @@ static wxArrayString GetListOfResolutions()
 			resos.push_back(strRes);
 			retlist.Add(StrToWxStr(res));
 		}
-		ZeroMemory(&dmi, sizeof(dmi));
 	}
 #elif defined(HAVE_XRANDR) && HAVE_XRANDR
 	std::vector<std::string> resos;
@@ -438,8 +457,18 @@ VideoConfigDiag::VideoConfigDiag(wxWindow* parent, const std::string &title, con
 
 		szr_stereo->Add(new wxStaticText(page_enh, wxID_ANY, _("Stereoscopic 3D Mode:")), 1, wxALIGN_CENTER_VERTICAL, 0);
 
-		const wxString stereo_choices[] = { "Off", "Side-by-Side", "Top-and-Bottom", "Anaglyph", "Nvidia 3D Vision" };
-		wxChoice* stereo_choice = CreateChoice(page_enh, vconfig.iStereoMode, wxGetTranslation(stereo_3d_desc), vconfig.backend_info.bSupports3DVision ? ArraySize(stereo_choices) : ArraySize(stereo_choices) - 1, stereo_choices);
+#ifdef _WIN32
+		const wxString stereo_choices[] = { "Off", "Side-by-Side", "Top-and-Bottom", "Anaglyph", "Nvidia 3D Vision", "Oculus", "VR920" };
+		const wxString stereo_choices_na[] = { "Off", "Side-by-Side", "Top-and-Bottom", "Anaglyph", "N/A", "Oculus", "VR920" };
+#else
+		const wxString stereo_choices[] = { "Off", "Side-by-Side", "Top-and-Bottom", "Anaglyph", "Nvidia 3D Vision", "Oculus" };
+		const wxString stereo_choices_na[] = { "Off", "Side-by-Side", "Top-and-Bottom", "Anaglyph", "N/A", "Oculus" };
+#endif
+		wxChoice* stereo_choice;
+		if (vconfig.backend_info.bSupports3DVision)
+			stereo_choice = CreateChoice(page_enh, vconfig.iStereoMode, wxGetTranslation(stereo_3d_desc), (sizeof(stereo_choices) / sizeof(*stereo_choices)), stereo_choices);
+		else
+			stereo_choice = CreateChoice(page_enh, vconfig.iStereoMode, wxGetTranslation(stereo_3d_desc), (sizeof(stereo_choices_na) / sizeof(*stereo_choices_na)), stereo_choices_na);
 		stereo_choice->Bind(wxEVT_CHOICE, &VideoConfigDiag::Event_StereoMode, this);
 		szr_stereo->Add(stereo_choice);
 
@@ -447,7 +476,7 @@ VideoConfigDiag::VideoConfigDiag(wxWindow* parent, const std::string &title, con
 		sep_slider->Bind(wxEVT_SLIDER, &VideoConfigDiag::Event_StereoDepth, this);
 		RegisterControl(sep_slider, wxGetTranslation(stereo_depth_desc));
 
-		szr_stereo->Add(new wxStaticText(page_enh, wxID_ANY, _("Depth:")), 1, wxALIGN_CENTER_VERTICAL, 0);
+		szr_stereo->Add(new wxStaticText(page_enh, wxID_ANY, _("Separation:")), 1, wxALIGN_CENTER_VERTICAL, 0);
 		szr_stereo->Add(sep_slider, 0, wxEXPAND | wxRIGHT);
 
 		wxSlider* const conv_slider = new wxSlider(page_enh, wxID_ANY, vconfig.iStereoConvergence, 0, 500, wxDefaultPosition, wxDefaultSize);
@@ -483,10 +512,12 @@ VideoConfigDiag::VideoConfigDiag(wxWindow* parent, const std::string &title, con
 	wxStaticBoxSizer* const group_efbcopy = new wxStaticBoxSizer(wxHORIZONTAL, page_hacks, _("EFB Copies"));
 
 	SettingCheckBox* efbcopy_disable = CreateCheckBox(page_hacks, _("Disable"), wxGetTranslation(efb_copy_desc), vconfig.bEFBCopyEnable, true);
+	efbcopy_clear_disable = CreateCheckBox(page_hacks, _("Remove Blank EFB Copy Box"), wxGetTranslation(efb_copy_clear_desc), vconfig.bEFBCopyClearDisable, false);
 	efbcopy_texture = CreateRadioButton(page_hacks, _("Texture"), wxGetTranslation(efb_copy_texture_desc), vconfig.bCopyEFBToTexture, false, wxRB_GROUP);
 	efbcopy_ram = CreateRadioButton(page_hacks, _("RAM"), wxGetTranslation(efb_copy_ram_desc), vconfig.bCopyEFBToTexture, true);
 
 	group_efbcopy->Add(efbcopy_disable, 0, wxLEFT | wxRIGHT | wxBOTTOM, 5);
+	group_efbcopy->Add(efbcopy_clear_disable, 0, wxLEFT | wxRIGHT | wxBOTTOM, 5);
 	group_efbcopy->AddStretchSpacer(1);
 	group_efbcopy->Add(efbcopy_texture, 0, wxRIGHT, 5);
 	group_efbcopy->Add(efbcopy_ram, 0, wxRIGHT, 5);
@@ -576,7 +607,7 @@ VideoConfigDiag::VideoConfigDiag(wxWindow* parent, const std::string &title, con
 	szr_utility->Add(CreateCheckBox(page_advanced, _("Dump Textures"), wxGetTranslation(dump_textures_desc), vconfig.bDumpTextures));
 	szr_utility->Add(CreateCheckBox(page_advanced, _("Load Custom Textures"), wxGetTranslation(load_hires_textures_desc), vconfig.bHiresTextures));
 	szr_utility->Add(CreateCheckBox(page_advanced, _("Dump EFB Target"), wxGetTranslation(dump_efb_desc), vconfig.bDumpEFBTarget));
-	szr_utility->Add(CreateCheckBox(page_advanced, _("Free Look"), wxGetTranslation(free_look_desc), vconfig.bFreeLook));
+	szr_utility->Add(CreateCheckBox(page_advanced, _("Mouse Free Look"), wxGetTranslation(free_look_desc), vconfig.bFreeLook));
 #if !defined WIN32 && defined HAVE_LIBAV
 	szr_utility->Add(CreateCheckBox(page_advanced, _("Frame Dumps use FFV1"), wxGetTranslation(use_ffv1_desc), vconfig.bUseFFV1));
 #endif
@@ -666,6 +697,13 @@ SettingRadioButton* VideoConfigDiag::CreateRadioButton(wxWindow* parent, const w
 	SettingRadioButton* const rb = new SettingRadioButton(parent, label, wxString(), setting, reverse, style);
 	RegisterControl(rb, description);
 	return rb;
+}
+
+SettingNumber* VideoConfigDiag::CreateNumber(wxWindow* parent, float &setting, const wxString& description, float min, float max, float inc, long style)
+{
+	SettingNumber* const sn = new SettingNumber(parent, wxString(), setting, min, max, inc, style);
+	RegisterControl(sn, description);
+	return sn;
 }
 
 /* Use this to register descriptions for controls which have NOT been created using the Create* functions from above */
@@ -763,3 +801,6 @@ void VideoConfigDiag::PopulatePostProcessingShaders()
 	postprocessing_shader.LoadShader(vconfig.sPostProcessingShader);
 	button_config_pp->Enable(postprocessing_shader.HasOptions());
 }
+
+template class FloatSetting<float>;
+template class FloatSetting<double>;

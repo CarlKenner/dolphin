@@ -34,6 +34,7 @@ SCoreStartupParameter::SCoreStartupParameter()
   bJITILTimeProfiling(false), bJITILOutputIR(false),
   bFPRF(false),
   bCPUThread(true), bDSPThread(false), bDSPHLE(true),
+  m_GPUDeterminismMode(GPU_DETERMINISM_AUTO),
   bSkipIdle(true), bSyncGPUOnSkipIdleHack(true), bNTSC(false), bForceNTSCJ(false),
   bHLE_BS2(true), bEnableCheats(false),
   bMergeBlocks(false), bEnableMemcardSaving(true),
@@ -50,6 +51,7 @@ SCoreStartupParameter::SCoreStartupParameter()
   bRenderWindowAutoSize(false), bKeepWindowOnTop(false),
   bFullscreen(false), bRenderToMain(false),
   bProgressive(false), bDisableScreenSaver(false),
+  bAsynchronousTimewarp(false),
   iPosX(100), iPosY(100), iWidth(800), iHeight(600),
   bLoopFifoReplay(true)
 {
@@ -92,6 +94,7 @@ void SCoreStartupParameter::LoadDefaults()
 	iPosY = 100;
 	iWidth = 800;
 	iHeight = 600;
+	bAsynchronousTimewarp = false;
 
 	bLoopFifoReplay = true;
 

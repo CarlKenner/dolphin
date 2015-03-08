@@ -15,6 +15,7 @@
 #include "UICommon/UICommon.h"
 
 #include "VideoCommon/VideoBackendBase.h"
+#include "VideoCommon/VR.h"
 
 namespace UICommon
 {

@@ -50,7 +50,9 @@ enum StereoMode
 	STEREO_SBS,
 	STEREO_TAB,
 	STEREO_ANAGLYPH,
-	STEREO_3DVISION
+	STEREO_3DVISION,
+	STEREO_OCULUS,
+	STEREO_VR920,
 };
 
 // NEVER inherit from this class.
@@ -58,11 +60,16 @@ struct VideoConfig final
 {
 	VideoConfig();
 	void Load(const std::string& ini_file);
+	void LoadVR(const std::string& ini_file);
 	void GameIniLoad();
+	void GameIniSave();
+	void GameIniReset();
 	void VerifyValidity();
 	void Save(const std::string& ini_file);
+	void SaveVR(const std::string& ini_file);
 	void UpdateProjectionHack();
 	bool IsVSync();
+	bool VRSettingsModified();
 
 	// General
 	bool bVSync;
@@ -114,6 +121,7 @@ struct VideoConfig final
 	bool bPerfQueriesEnable;
 
 	bool bEFBCopyEnable;
+	bool bEFBCopyClearDisable;
 	bool bEFBEmulateFormatChanges;
 	bool bCopyEFBToTexture;
 	bool bCopyEFBScaled;
@@ -130,6 +138,87 @@ struct VideoConfig final
 	bool bStereoEFBMonoDepth;
 	int iStereoDepthPercentage;
 	int iStereoConvergenceMinimum;
+
+	// VR global
+	float fScale;
+	float fLeanBackAngle;
+	bool bPullUp20fps;
+	bool bPullUp30fps;
+	bool bPullUp60fps;
+	bool bOpcodeWarningDisable;
+	bool bPullUp20fpsTimewarp;
+	bool bPullUp30fpsTimewarp;
+	bool bPullUp60fpsTimewarp;
+	bool bAsynchronousTimewarp;
+	bool bEnableVR;
+	bool bLowPersistence;
+	bool bDynamicPrediction;
+	bool bNoMirrorToWindow;
+	bool bOrientationTracking;
+	bool bMagYawCorrection;
+	bool bPositionTracking;
+	bool bChromatic;
+	bool bTimewarp;
+	bool bVignette;
+	bool bNoRestore;
+	bool bFlipVertical;
+	bool bSRGB;
+	bool bOverdrive;
+	bool bHqDistortion;
+	bool bDisableNearClipping;
+	bool bShowHands;
+	bool bShowFeet;
+	bool bShowController;
+	bool bShowSensorBar;
+	bool bShowGameCamera;
+	bool bShowGameFrustum;
+	bool bShowTrackingCamera;
+	bool bShowTrackingVolume;
+	bool bShowBaseStation;
+
+	bool bMotionSicknessAlways;
+	bool bMotionSicknessFreelook;
+	bool bMotionSickness2D;
+	bool bMotionSicknessLeftStick;
+	bool bMotionSicknessRightStick;
+	bool bMotionSicknessDPad;
+	bool bMotionSicknessIR;
+	int iMotionSicknessMethod;
+	int iMotionSicknessSkybox;
+	float fMotionSicknessFOV;
+
+	int iVRPlayer;
+	float fTimeWarpTweak;
+	u32 iExtraFrames;
+	u32 iExtraVideoLoops;
+	u32 iExtraVideoLoopsDivider;
+
+	// VR
+	float fUnitsPerMetre;
+	float fFreeLookSensitivity;
+	float fHudThickness;
+	float fHudDistance;
+	float fHud3DCloser;
+	float fCameraForward;
+	float fCameraPitch;
+	float fAimDistance;
+	float fMinFOV;
+	float fScreenHeight;
+	float fScreenThickness;
+	float fScreenDistance;
+	float fScreenRight;
+	float fScreenUp;
+	float fScreenPitch;
+	float fTelescopeMaxFOV;
+	bool bDisable3D;
+	bool bHudFullscreen;
+	bool bHudOnTop;
+	bool bDontClearScreen;
+	int iTelescopeEye;
+	int iMetroidPrime;
+	// VR layer debugging
+	int iSelectedLayer;
+	int iFlashState;
 
 	// D3D only config, mostly to be merged into the above
 	int iAdapter;

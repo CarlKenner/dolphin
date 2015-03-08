@@ -5,8 +5,11 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 #include "Common/IniFile.h"
+
+typedef std::vector<u8> SkipEntry;
 
 enum Hotkey
 {
@@ -117,6 +120,48 @@ enum Hotkey
 	NUM_HOTKEYS,
 };
 
+enum VRFreelook
+{
+    VR_POSITION_RESET,
+	VR_CAMERA_FORWARD,
+	VR_CAMERA_BACKWARD,
+	VR_CAMERA_LEFT,
+	VR_CAMERA_RIGHT,
+	VR_CAMERA_UP,
+	VR_CAMERA_DOWN,
+
+	VR_PERMANENT_CAMERA_FORWARD,
+	VR_PERMANENT_CAMERA_BACKWARD,
+	VR_LARGER_SCALE,
+	VR_SMALLER_SCALE,
+	VR_GLOBAL_LARGER_SCALE,
+	VR_GLOBAL_SMALLER_SCALE,
+	VR_CAMERA_TILT_UP,
+	VR_CAMERA_TILT_DOWN,
+
+	VR_HUD_FORWARD,
+	VR_HUD_BACKWARD,
+	VR_HUD_THICKER,
+	VR_HUD_THINNER,
+	VR_HUD_3D_CLOSER,
+	VR_HUD_3D_FURTHER,
+
+	VR_2D_SCREEN_LARGER,
+	VR_2D_SCREEN_SMALLER,
+	VR_2D_CAMERA_FORWARD,
+	VR_2D_CAMERA_BACKWARD,
+	//VR_2D_SCREEN_LEFT, //DOESN'T_EXIST_RIGHT_NOW?
+	//VR_2D_SCREEN_RIGHT, //DOESN'T_EXIST_RIGHT_NOW?
+	VR_2D_CAMERA_UP,
+	VR_2D_CAMERA_DOWN,
+	VR_2D_CAMERA_TILT_UP,
+	VR_2D_CAMERA_TILT_DOWN,
+	VR_2D_SCREEN_THICKER,
+	VR_2D_SCREEN_THINNER,
+
+	NUM_VR_HOTKEYS,
+};
+
 enum GPUDeterminismMode
 {
 	GPU_DETERMINISM_AUTO,
@@ -200,6 +245,29 @@ struct SCoreStartupParameter
 	// Hotkeys
 	int iHotkey[NUM_HOTKEYS];
 	int iHotkeyModifier[NUM_HOTKEYS];
+	bool bHotkeyKBM[NUM_HOTKEYS];
+	bool bHotkeyDInput[NUM_HOTKEYS];
+	u32 iHotkeyDandXInputMapping[NUM_HOTKEYS];
+	u32 iHotkeyDInputMappingExtra[NUM_HOTKEYS];
+	bool bHotkeysXInput;
+	float fFreeLookSensitivity;
+
+	// VR Settings
+	int iVRSettings[NUM_VR_HOTKEYS];
+	int iVRSettingsModifier[NUM_VR_HOTKEYS];
+	bool bVRSettingsKBM[NUM_VR_HOTKEYS];
+	bool bVRSettingsDInput[NUM_VR_HOTKEYS];
+	u32 iVRSettingsDandXInputMapping[NUM_VR_HOTKEYS];
+	u32 iVRSettingsDInputMappingExtra[NUM_VR_HOTKEYS];
+
+	//Remove Layer
+	std::vector<SkipEntry> object_removal_codes;
+	u32 skip_objects_end = 0;
+	u32 skip_objects_start = 0;
+	size_t num_object_removal_codes = 0;
+	std::vector<int> num_object_removal_data_bytes;
+	volatile bool update = true;
+	volatile bool done = true;
 
 	// Display settings
 	std::string strFullscreenResolution;
@@ -208,6 +276,7 @@ struct SCoreStartupParameter
 	bool bRenderWindowAutoSize, bKeepWindowOnTop;
 	bool bFullscreen, bRenderToMain;
 	bool bProgressive, bDisableScreenSaver;
+	bool bAsynchronousTimewarp;
 
 	int iPosX, iPosY, iWidth, iHeight;
 

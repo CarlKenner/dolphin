@@ -39,6 +39,7 @@
 #include "DiscIO/Volume.h"
 #include "DiscIO/VolumeCreator.h"
 #include "VideoCommon/VideoBackendBase.h"
+#include "VideoCommon/VR.h"
 
 namespace BootManager
 {
@@ -59,19 +60,6 @@ struct ConfigCache
 	bool bSetFramelimit, bSetEXIDevice[MAX_EXI_CHANNELS], bSetVolume, bSetPads[MAX_SI_CHANNELS], bSetWiimoteSource[MAX_BBMOTES], bSetFrameSkip;
 };
 static ConfigCache config_cache;
-
-static GPUDeterminismMode ParseGPUDeterminismMode(const std::string& mode)
-{
-	if (mode == "auto")
-		return GPU_DETERMINISM_AUTO;
-	if (mode == "none")
-		return GPU_DETERMINISM_NONE;
-	if (mode == "fake-completion")
-		return GPU_DETERMINISM_FAKE_COMPLETION;
-
-	NOTICE_LOG(BOOT, "Unknown GPU determinism mode %s", mode.c_str());
-	return GPU_DETERMINISM_AUTO;
-}
 
 // Boot the ISO or file
 bool BootCore(const std::string& _rFilename)
@@ -220,6 +208,11 @@ bool BootCore(const std::string& _rFilename)
 			}
 		}
 	}
+
+	if (g_is_direct_mode && !g_force_vr && StartUp.m_GPUDeterminismMode != GPU_DETERMINISM_FAKE_COMPLETION)
+		PanicAlert("The Rift is running in direct mode without 'deterministic dual core' set to 'fake-completion'."
+				    " This has been known to cause judder.  Try changing this setting located in the"
+					" 'config' tab if you experience issues.");
 
 	StartUp.m_GPUDeterminismMode = ParseGPUDeterminismMode(StartUp.m_strGPUDeterminismMode);
 

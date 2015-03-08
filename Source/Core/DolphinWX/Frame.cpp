@@ -1,4 +1,4 @@
-// Copyright 2013 Dolphin Emulator Project
+// Copyright 2015 Dolphin Emulator Project
 // Licensed under GPLv2
 // Refer to the license.txt file included.
 
@@ -59,12 +59,11 @@
 #include "DolphinWX/WxUtils.h"
 #include "DolphinWX/Debugger/CodeWindow.h"
 
-#include "InputCommon/GCPadStatus.h"
-
 #include "VideoCommon/OnScreenDisplay.h"
 #include "VideoCommon/RenderBase.h"
 #include "VideoCommon/VertexShaderManager.h"
 #include "VideoCommon/VideoConfig.h"
+#include "VideoCommon/VR.h"
 
 // Resources
 
@@ -157,9 +156,80 @@ bool CRenderFrame::IsValidSavestateDropped(const std::string& filepath)
 	return internal_game_id == SConfig::GetInstance().m_LocalCoreStartupParameter.GetUniqueID();
 }
 
+// save last position
+void ch_guardar_ultimaposicion(int posicion){
+	std::ofstream myfile(File::GetUserPath(D_SCREENSHOTS_IDX) + "posicion.txt");
+	if (myfile.is_open())
+	{
+		std::string Result;
+		std::ostringstream convert;   // stream used for the conversion
+		convert << posicion;      // insert the textual representation of 'Number' in the characters in the stream
+		myfile << convert.str() + "\n";
+		myfile.close();
+	}	
+}
+// load last position
+int ch_cargar_ultimaposicion(){
+	
+	
+	std::string line;
+	std::ifstream myfile(File::GetUserPath(D_SCREENSHOTS_IDX) +"posicion.txt");
+	std::string aux;
+	
+	if (myfile.is_open())
+	{
+		while (getline(myfile, line))
+		{
+			aux= line;
+		}
+		myfile.close();
+		
+	}
+	return (atoi(aux.c_str())+1);
+}
+
 #ifdef _WIN32
 WXLRESULT CRenderFrame::MSWWindowProc(WXUINT nMsg, WXWPARAM wParam, WXLPARAM lParam)
 {
+	// Action Replay culling code brute forcing by penkamaster
+	if (Core::ch_bruteforce)
+	{
+		Core::ch_cicles_without_snapshot += 1;
+		// if begining searching, start from the most recently saved position
+		if (Core::ch_comenzar_busqueda)
+		{
+			Core::ch_comenzar_busqueda = false;
+			Core::ch_next_code = false;
+			Core::ch_codigoactual = 0;
+			Core::ch_codigoactual = ch_cargar_ultimaposicion();
+			ch_guardar_ultimaposicion(Core::ch_codigoactual);
+			State::Load(1);
+		}
+		else
+		{
+			// if we should move on to the next code then do so, and save where we are up to
+			if (Core::ch_next_code)
+			{
+				Core::ch_next_code = false;
+				Core::ch_codigoactual += 1;
+				ch_guardar_ultimaposicion(Core::ch_codigoactual);
+				Core::ch_cicles_without_snapshot = 0;
+				State::Load(1);
+			}
+			// if we have received 65 windows messages without saving a screenshot, then this code is probably bad
+			// so skip to the next one
+			else if ( Core::ch_cicles_without_snapshot > 65 && Core::ch_cacheo_pasado)
+			{
+				Core::ch_next_code = false;
+				Core::ch_codigoactual += 1;
+				ch_guardar_ultimaposicion(Core::ch_codigoactual);
+				Core::ch_cicles_without_snapshot = 0;
+				State::Load(1);
+			
+			}
+		}
+	}
+
 	switch (nMsg)
 	{
 		case WM_SYSCOMMAND:
@@ -268,6 +338,7 @@ EVT_MENU(wxID_PREFERENCES, CFrame::OnConfigMain)
 EVT_MENU(IDM_CONFIG_GFX_BACKEND, CFrame::OnConfigGFX)
 EVT_MENU(IDM_CONFIG_AUDIO, CFrame::OnConfigAudio)
 EVT_MENU(IDM_CONFIG_CONTROLLERS, CFrame::OnConfigControllers)
+EVT_MENU(IDM_CONFIG_VR, CFrame::OnConfigVR)
 EVT_MENU(IDM_CONFIG_HOTKEYS, CFrame::OnConfigHotkey)
 
 EVT_MENU(IDM_SAVE_PERSPECTIVE, CFrame::OnPerspectiveMenu)
@@ -292,6 +363,7 @@ EVT_MENU(IDM_MENU_INSTALL_WAD, CFrame::OnInstallWAD)
 EVT_MENU(IDM_LIST_INSTALL_WAD, CFrame::OnInstallWAD)
 EVT_MENU(IDM_LOAD_WII_MENU, CFrame::OnLoadWiiMenu)
 EVT_MENU(IDM_FIFOPLAYER, CFrame::OnFifoPlayer)
+EVT_MENU(IDM_DEBUGGER, CFrame::OnDebugger)
 
 EVT_MENU(IDM_TOGGLE_FULLSCREEN, CFrame::OnToggleFullscreen)
 EVT_MENU(IDM_TOGGLE_DUAL_CORE, CFrame::OnToggleDualCore)
@@ -759,7 +831,7 @@ void CFrame::OnRenderWindowSizeRequest(int width, int height)
 {
 	if (!Core::IsRunning() ||
 			!SConfig::GetInstance().m_LocalCoreStartupParameter.bRenderWindowAutoSize ||
-			RendererIsFullscreen() || m_RenderFrame->IsMaximized())
+			RendererIsFullscreen() || m_RenderFrame->IsMaximized() || g_has_hmd)
 		return;
 
 	int old_width, old_height, log_width = 0, log_height = 0;
@@ -908,7 +980,16 @@ static bool IsHotkey(wxKeyEvent &event, int Id)
 {
 	return (event.GetKeyCode() != WXK_NONE &&
 			event.GetKeyCode() == SConfig::GetInstance().m_LocalCoreStartupParameter.iHotkey[Id] &&
-			event.GetModifiers() == SConfig::GetInstance().m_LocalCoreStartupParameter.iHotkeyModifier[Id]);
+			event.GetModifiers() == SConfig::GetInstance().m_LocalCoreStartupParameter.iHotkeyModifier[Id] &&
+			true == SConfig::GetInstance().m_LocalCoreStartupParameter.bHotkeyKBM[Id]);
+}
+
+static bool IsVRSettingsKey(wxKeyEvent &event, int Id)
+{
+	return (event.GetKeyCode() != WXK_NONE &&
+		event.GetKeyCode() == SConfig::GetInstance().m_LocalCoreStartupParameter.iVRSettings[Id] &&
+		event.GetModifiers() == SConfig::GetInstance().m_LocalCoreStartupParameter.iVRSettingsModifier[Id] &&
+		true == SConfig::GetInstance().m_LocalCoreStartupParameter.bVRSettingsKBM[Id]);
 }
 
 int GetCmdForHotkey(unsigned int key)
@@ -1216,30 +1297,220 @@ void CFrame::OnKeyDown(wxKeyEvent& event)
 			OnConnectWiimote(evt);
 		}
 
-		if (g_Config.bFreeLook)
+		if (g_has_hmd || g_Config.bFreeLook)
 		{
-			static float debugSpeed = 1.0f;
+			// Maths is probably cheaper than if statements, so always recalculate
+			float freeLookSpeed = 0.1f * g_ActiveConfig.fFreeLookSensitivity;
 
 			if (IsHotkey(event, HK_FREELOOK_DECREASE_SPEED))
-				debugSpeed /= 2.0f;
+				g_ActiveConfig.fFreeLookSensitivity /= 2.0f;
 			else if (IsHotkey(event, HK_FREELOOK_INCREASE_SPEED))
-				debugSpeed *= 2.0f;
+				g_ActiveConfig.fFreeLookSensitivity *= 2.0f;
 			else if (IsHotkey(event, HK_FREELOOK_RESET_SPEED))
-				debugSpeed = 1.0f;
+				g_ActiveConfig.fFreeLookSensitivity = 1.0f;
 			else if (IsHotkey(event, HK_FREELOOK_UP))
-				VertexShaderManager::TranslateView(0.0f, 0.0f, -debugSpeed);
+				VertexShaderManager::TranslateView(0.0f, 0.0f, -freeLookSpeed / 2);
 			else if (IsHotkey(event, HK_FREELOOK_DOWN))
-				VertexShaderManager::TranslateView(0.0f, 0.0f, debugSpeed);
+				VertexShaderManager::TranslateView(0.0f, 0.0f, freeLookSpeed / 2);
 			else if (IsHotkey(event, HK_FREELOOK_LEFT))
-				VertexShaderManager::TranslateView(debugSpeed, 0.0f);
+				VertexShaderManager::TranslateView(freeLookSpeed, 0.0f);
 			else if (IsHotkey(event, HK_FREELOOK_RIGHT))
-				VertexShaderManager::TranslateView(-debugSpeed, 0.0f);
+				VertexShaderManager::TranslateView(-freeLookSpeed, 0.0f);
 			else if (IsHotkey(event, HK_FREELOOK_ZOOM_IN))
-				VertexShaderManager::TranslateView(0.0f, debugSpeed);
+				VertexShaderManager::TranslateView(0.0f, freeLookSpeed);
 			else if (IsHotkey(event, HK_FREELOOK_ZOOM_OUT))
-				VertexShaderManager::TranslateView(0.0f, -debugSpeed);
+				VertexShaderManager::TranslateView(0.0f, -freeLookSpeed);
 			else if (IsHotkey(event, HK_FREELOOK_RESET))
+			{
 				VertexShaderManager::ResetView();
+				VR_RecenterHMD();
+			}
+			else if (g_has_hmd)
+			{
+				if (IsVRSettingsKey(event, VR_LARGER_SCALE))
+				{
+					// Make everything 10% bigger (and further)
+					g_Config.fUnitsPerMetre /= 1.10f;
+					VertexShaderManager::ScaleView(1.10f);
+					NOTICE_LOG(VR, "%f units per metre (each unit is %f cm)", g_Config.fUnitsPerMetre, 100.0f / g_Config.fUnitsPerMetre);
+				}
+				else if (IsVRSettingsKey(event, VR_SMALLER_SCALE))
+				{
+					// Make everything 10% smaller (and closer)
+					g_Config.fUnitsPerMetre *= 1.10f;
+					VertexShaderManager::ScaleView(1.0f / 1.10f);
+					NOTICE_LOG(VR, "%f units per metre (each unit is %f cm)", g_Config.fUnitsPerMetre, 100.0f / g_Config.fUnitsPerMetre);
+				}
+				if (IsVRSettingsKey(event, VR_GLOBAL_LARGER_SCALE))
+				{
+					// Make everything 10% bigger (and further)
+					g_Config.fScale *= 1.10f;
+					SConfig::GetInstance().SaveSingleSetting("VR", "Scale", g_Config.fScale);
+					VertexShaderManager::ScaleView(1.10f);
+				}
+				else if (IsVRSettingsKey(event, VR_GLOBAL_SMALLER_SCALE))
+				{
+					// Make everything 10% smaller (and closer)
+					g_Config.fScale /= 1.10f;
+					SConfig::GetInstance().SaveSingleSetting("VR", "Scale", g_Config.fScale);
+					VertexShaderManager::ScaleView(1.0f / 1.10f);
+				}
+				else if (IsVRSettingsKey(event, VR_PERMANENT_CAMERA_FORWARD)) {
+					// Move camera forward 10cm
+					g_Config.fCameraForward += freeLookSpeed;
+					NOTICE_LOG(VR, "Camera is %5.1fm (%5.0fcm) forward", g_Config.fCameraForward, g_Config.fCameraForward * 100);
+				}
+				else if (IsVRSettingsKey(event, VR_PERMANENT_CAMERA_BACKWARD)) {
+					// Move camera back 10cm
+					g_Config.fCameraForward -= freeLookSpeed;
+					NOTICE_LOG(VR, "Camera is %5.1fm (%5.0fcm) forward", g_Config.fCameraForward, g_Config.fCameraForward * 100);
+				}
+				else if (IsVRSettingsKey(event, VR_CAMERA_TILT_UP)) {
+					// Pitch camera up 5 degrees
+					g_Config.fCameraPitch += 5.0f;
+					NOTICE_LOG(VR, "Camera is pitched %5.1f degrees up", g_Config.fCameraPitch);
+				}
+				else if (IsVRSettingsKey(event, VR_CAMERA_TILT_DOWN)) {
+					// Pitch camera down 5 degrees
+					g_Config.fCameraPitch -= 5.0f;
+					NOTICE_LOG(VR, "Camera is pitched %5.1f degrees up", g_Config.fCameraPitch);
+				}
+				else if (IsVRSettingsKey(event, VR_HUD_FORWARD)) {
+					// Move HUD out 10cm
+					g_Config.fHudDistance += 0.1f;
+					NOTICE_LOG(VR, "HUD is %5.1fm (%5.0fcm) away", g_Config.fHudDistance, g_Config.fHudDistance * 100);
+				}
+				else if (IsVRSettingsKey(event, VR_HUD_BACKWARD)) {
+					// Move HUD in 10cm
+					g_Config.fHudDistance -= 0.1f;
+					if (g_Config.fHudDistance <= 0)
+						g_Config.fHudDistance = 0;
+					NOTICE_LOG(VR, "HUD is %5.1fm (%5.0fcm) away", g_Config.fHudDistance, g_Config.fHudDistance * 100);
+				}
+				else if (IsVRSettingsKey(event, VR_HUD_THICKER)) {
+					// Make HUD 10cm thicker
+					if (g_Config.fHudThickness < 0.01f)
+						g_Config.fHudThickness = 0.01f;
+					else if (g_Config.fHudThickness < 0.1f)
+						g_Config.fHudThickness += 0.01f;
+					else
+						g_Config.fHudThickness += 0.1f;
+					NOTICE_LOG(VR, "HUD is %5.2fm (%5.0fcm) thick", g_Config.fHudThickness, g_Config.fHudThickness * 100);
+				}
+				else if (IsVRSettingsKey(event, VR_HUD_THINNER)) {
+					// Make HUD 10cm thinner
+					if (g_Config.fHudThickness <= 0.01f)
+						g_Config.fHudThickness = 0;
+					else if (g_Config.fHudThickness <= 0.1f)
+						g_Config.fHudThickness -= 0.01f;
+					else
+						g_Config.fHudThickness -= 0.1f;
+					NOTICE_LOG(VR, "HUD is %5.2fm (%5.0fcm) thick", g_Config.fHudThickness, g_Config.fHudThickness * 100);
+				}
+				else if (IsVRSettingsKey(event, VR_HUD_3D_CLOSER)) {
+					// Make HUD 3D elements 5% closer (and smaller)
+					if (g_Config.fHud3DCloser >= 0.95f)
+						g_Config.fHud3DCloser = 1;
+					else
+						g_Config.fHud3DCloser += 0.05f;
+					NOTICE_LOG(VR, "HUD 3D Items are %5.1f%% closer", g_Config.fHud3DCloser * 100);
+				}
+				else if (IsVRSettingsKey(event, VR_HUD_3D_FURTHER)) {
+					// Make HUD 3D elements 5% further (and smaller)
+					if (g_Config.fHud3DCloser <= 0.05f)
+						g_Config.fHud3DCloser = 0;
+					else
+						g_Config.fHud3DCloser -= 0.05f;
+					NOTICE_LOG(VR, "HUD 3D Items are %5.1f%% closer", g_Config.fHud3DCloser * 100);
+				}
+				else if (IsVRSettingsKey(event, VR_2D_SCREEN_LARGER)) {
+					// Make everything 20% smaller (and closer)
+					g_Config.fScreenHeight *= 1.05f;
+					NOTICE_LOG(VR, "Screen is %fm high", g_Config.fScreenHeight);
+				}
+				else if (IsVRSettingsKey(event, VR_2D_SCREEN_SMALLER)) {
+					// Make everything 20% bigger (and further)
+					g_Config.fScreenHeight /= 1.05f;
+					NOTICE_LOG(VR, "Screen is %fm High", g_Config.fScreenHeight);
+				}
+				else if (IsVRSettingsKey(event, VR_2D_SCREEN_THICKER)) {
+					// Make Screen 10cm thicker
+					if (g_Config.fScreenThickness < 0.01f)
+						g_Config.fScreenThickness = 0.01f;
+					else if (g_Config.fScreenThickness < 0.1f)
+						g_Config.fScreenThickness += 0.01f;
+					else
+						g_Config.fScreenThickness += 0.1f;
+					NOTICE_LOG(VR, "Screen is %5.2fm (%5.0fcm) thick", g_Config.fScreenThickness, g_Config.fScreenThickness * 100);
+				}
+				else if (IsVRSettingsKey(event, VR_2D_SCREEN_THINNER)) {
+					// Make Screen 10cm thinner
+					if (g_Config.fScreenThickness <= 0.01f)
+						g_Config.fScreenThickness = 0;
+					else if (g_Config.fScreenThickness <= 0.1f)
+						g_Config.fScreenThickness -= 0.01f;
+					else
+						g_Config.fScreenThickness -= 0.1f;
+					NOTICE_LOG(VR, "Screen is %5.2fm (%5.0fcm) thick", g_Config.fScreenThickness, g_Config.fScreenThickness * 100);
+				}
+				else if (IsVRSettingsKey(event, VR_2D_CAMERA_FORWARD)) {
+					// Move Screen in 10cm
+					g_Config.fScreenDistance -= 0.1f;
+					if (g_Config.fScreenDistance <= 0)
+						g_Config.fScreenDistance = 0;
+					NOTICE_LOG(VR, "Screen is %5.1fm (%5.0fcm) away", g_Config.fScreenDistance, g_Config.fScreenDistance * 100);
+				}
+				else if (IsVRSettingsKey(event, VR_2D_CAMERA_BACKWARD)) {
+					// Move Screen out 10cm
+					g_Config.fScreenDistance += 0.1f;
+					NOTICE_LOG(VR, "Screen is %5.1fm (%5.0fcm) away", g_Config.fScreenDistance, g_Config.fScreenDistance * 100);
+				}
+				else if (IsVRSettingsKey(event, VR_2D_CAMERA_UP)) {
+					// Move Screen Down (Camera Up) 10cm
+					g_Config.fScreenUp -= 0.1f;
+					NOTICE_LOG(VR, "Screen is %5.1fm up", g_Config.fScreenUp);
+				}
+				else if (IsVRSettingsKey(event, VR_2D_CAMERA_DOWN)) {
+					// Move Screen Up (Camera Down) 10cm
+					g_Config.fScreenUp += 0.1f;
+					NOTICE_LOG(VR, "Screen is %5.1fm up", g_Config.fScreenUp);
+				}
+				else if (IsVRSettingsKey(event, VR_2D_CAMERA_TILT_UP)) {
+					// Pitch camera up 5 degrees
+					g_Config.fScreenPitch += 5.0f;
+					NOTICE_LOG(VR, "2D Camera is pitched %5.1f degrees up", g_Config.fScreenPitch);
+				}
+				else if (IsVRSettingsKey(event, VR_2D_CAMERA_TILT_DOWN)) {
+					// Pitch camera down 5 degrees
+					g_Config.fScreenPitch -= 5.0f;
+					NOTICE_LOG(VR, "2D Camera is pitched %5.1f degrees up", g_Config.fScreenPitch);;
+				}
+			}
+		}
+
+		if (g_has_hmd && event.GetModifiers() == wxMOD_SHIFT)
+		{
+			switch (event.GetKeyCode())
+			{
+			// Previous layer
+			case 'B':
+				g_Config.iSelectedLayer--;
+				if (g_Config.iSelectedLayer < -1)
+					g_Config.iSelectedLayer = -2;
+				NOTICE_LOG(VR, "Selected layer %d", g_Config.iSelectedLayer);
+				debug_nextScene = true;
+				break;
+			// Next layer
+			case 'N':
+				g_Config.iSelectedLayer++;
+				NOTICE_LOG(VR, "Selected layer %d", g_Config.iSelectedLayer);
+				debug_nextScene = true;
+				break;
+			case '\'':
+				NOTICE_LOG(VR, "--- pressed ' ---");
+				debug_nextScene = true;
+				break;
+			}
 		}
 	}
 	else
@@ -1310,8 +1581,18 @@ void CFrame::OnMouse(wxMouseEvent& event)
 
 		if (mouseMoveEnabled)
 		{
-			VertexShaderManager::TranslateView((event.GetX() - lastMouse[0]) / 50.0f,
-					(event.GetY() - lastMouse[1]) / 50.0f);
+			if (g_has_hmd)
+			{
+				VertexShaderManager::TranslateView(
+					(event.GetX() - lastMouse[0]) * g_ActiveConfig.fScale * g_ActiveConfig.fFreeLookSensitivity / 7.0f,
+					(event.GetY() - lastMouse[1]) * g_ActiveConfig.fScale * g_ActiveConfig.fFreeLookSensitivity / 7.0f);
+			}
+			else
+			{
+				VertexShaderManager::TranslateView(
+					((event.GetX() - lastMouse[0]) * g_ActiveConfig.fFreeLookSensitivity) / 7.0f,
+					((event.GetY() - lastMouse[1]) * g_ActiveConfig.fFreeLookSensitivity) / 7.0f);
+			}
 			lastMouse[0] = event.GetX();
 			lastMouse[1] = event.GetY();
 		}
@@ -1403,7 +1684,7 @@ void CFrame::DoFullscreen(bool enable_fullscreen)
 		m_RenderFrame->Raise();
 	}
 
-	g_Config.bFullscreen = enable_fullscreen;
+	g_Config.bFullscreen = (SConfig::GetInstance().m_LocalCoreStartupParameter.bRenderToMain) ? false : enable_fullscreen;
 }
 
 const CGameListCtrl *CFrame::GetGameListCtrl() const

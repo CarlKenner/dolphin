@@ -1,4 +1,4 @@
-// Copyright 2013 Dolphin Emulator Project
+// Copyright 2014 Dolphin Emulator Project
 // Licensed under GPLv2
 // Refer to the license.txt file included.
 
@@ -192,6 +192,7 @@ private:
 		Toolbar_ConfigGFX,
 		Toolbar_ConfigAudio,
 		Toolbar_Controller,
+		Toolbar_ConfigVR,
 		EToolbar_Max
 	};
 
@@ -294,6 +295,7 @@ private:
 	void OnConfigGFX(wxCommandEvent& event);
 	void OnConfigAudio(wxCommandEvent& event);
 	void OnConfigControllers(wxCommandEvent& event);
+	void OnConfigVR(wxCommandEvent& event);
 	void OnConfigHotkey(wxCommandEvent& event);
 
 	void OnToggleFullscreen(wxCommandEvent& event);
@@ -325,6 +327,7 @@ private:
 	void OnLoadWiiMenu(wxCommandEvent& event);
 	void OnInstallWAD(wxCommandEvent& event);
 	void OnFifoPlayer(wxCommandEvent& event);
+	void OnDebugger(wxCommandEvent& event);
 	void OnConnectWiimote(wxCommandEvent& event);
 	void GameListChanged(wxCommandEvent& event);
 

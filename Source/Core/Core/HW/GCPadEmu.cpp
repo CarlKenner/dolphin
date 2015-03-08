@@ -1,9 +1,10 @@
-// Copyright 2013 Dolphin Emulator Project
+// Copyright 2014 Dolphin Emulator Project
 // Licensed under GPLv2
 // Refer to the license.txt file included.
 
 #include "Core/Host.h"
 #include "Core/HW/GCPadEmu.h"
+#include "Core/HW/WiimoteEmu/HydraTLayer.h"
 
 // TODO: Move to header file when VS supports constexpr.
 const ControlState GCPad::DEFAULT_PAD_STICK_RADIUS = 1.0;
@@ -98,10 +99,6 @@ void GCPad::GetInput(GCPadStatus* const pad)
 	// buttons
 	m_buttons->GetState(&pad->button, button_bitmasks);
 
-	// set analog A/B analog to full or w/e, prolly not needed
-	if (pad->button & PAD_BUTTON_A) pad->analogA = 0xFF;
-	if (pad->button & PAD_BUTTON_B) pad->analogB = 0xFF;
-
 	// dpad
 	m_dpad->GetState(&pad->button, dpad_bitmasks);
 
@@ -118,6 +115,14 @@ void GCPad::GetInput(GCPadStatus* const pad)
 	m_triggers->GetState(&pad->button, trigger_bitmasks, triggers);
 	pad->triggerLeft = static_cast<u8>(triggers[0] * 0xFF);
 	pad->triggerRight = static_cast<u8>(triggers[1] * 0xFF);
+
+	HydraTLayer::GetGameCube(m_index, &pad->button, &pad->stickX, &pad->stickY, &pad->substickX, &pad->substickY, &pad->triggerLeft, &pad->triggerRight);
+
+	// set analog A/B analog to full or w/e, prolly not needed
+	if (pad->button & PAD_BUTTON_A)
+		pad->analogA = 0xFF;
+	if (pad->button & PAD_BUTTON_B)
+		pad->analogB = 0xFF;
 }
 
 void GCPad::SetOutput(const ControlState strength)

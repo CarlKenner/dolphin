@@ -7,6 +7,20 @@
 #include "VideoCommon/ConstantManager.h"
 #include "VideoCommon/VertexShaderGen.h"
 
+enum ViewportType {
+	VIEW_FULLSCREEN = 0,
+	VIEW_LETTERBOXED,
+	VIEW_HUD_ELEMENT,
+	VIEW_SKYBOX,
+	VIEW_PLAYER_1,
+	VIEW_PLAYER_2,
+	VIEW_PLAYER_3,
+	VIEW_PLAYER_4,
+	VIEW_OFFSCREEN,
+	VIEW_RENDER_TO_TEXTURE,
+};
+extern enum ViewportType g_viewport_type, g_old_viewport_type;
+
 class PointerWrap;
 
 void UpdateProjectionHack(int iParams[], std::string sParams[]);
@@ -22,6 +36,8 @@ public:
 
 	// constant management
 	static void SetConstants();
+	static void SetProjectionConstants();
+	static void SetViewportConstants();
 
 	static void InvalidateXFRange(int start, int end);
 	static void SetTexMatrixChangedA(u32 value);
@@ -30,8 +46,9 @@ public:
 	static void SetProjectionChanged();
 	static void SetMaterialColorChanged(int index, u32 color);
 
-	static void TranslateView(float x, float y, float z = 0.0f);
+	static void TranslateView(float left_metres, float forward_metres, float down_metres = 0.0f);
 	static void RotateView(float x, float y);
+	static void ScaleView(float scale);
 	static void ResetView();
 
 	// data: 3 floats representing the X, Y and Z vertex model coordinates and the posmatrix index.
@@ -41,5 +58,11 @@ public:
 	static void TransformToClipSpace(const float* data, float* out, u32 mtxIdx);
 
 	static VertexShaderConstants constants;
+	static float4 constants_eye_projection[2][4];
+	static bool m_layer_on_top;
 	static bool dirty;
 };
+
+void ScaleRequestedToRendered(EFBRectangle *src);
+extern EFBRectangle g_final_screen_region, g_requested_viewport, g_rendered_viewport;
+extern bool debug_newScene;

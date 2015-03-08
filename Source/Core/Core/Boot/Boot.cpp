@@ -1,7 +1,12 @@
-// Copyright 2013 Dolphin Emulator Project
+// Copyright 2015 Dolphin Emulator Project
 // Licensed under GPLv2
 // Refer to the license.txt file included.
 
+#ifdef _WIN32
+#include <direct.h>
+#else
+#include <sys/stat.h>
+#endif
 
 #include "Common/CommonPaths.h"
 #include "Common/CommonTypes.h"
@@ -14,6 +19,7 @@
 #include "Core/Core.h"
 #include "Core/Host.h"
 #include "Core/PatchEngine.h"
+#include "Core/RmObjEngine.h"
 #include "Core/VolumeHandler.h"
 #include "Core/Boot/Boot.h"
 #include "Core/Boot/Boot_DOL.h"
@@ -210,7 +216,7 @@ bool CBoot::BootUp()
 	// GCM and Wii
 	case SCoreStartupParameter::BOOT_ISO:
 	{
-		DiscIO::IVolume* pVolume = DiscIO::CreateVolumeFromFilename(_StartupPara.m_strFilename);
+		std::unique_ptr<DiscIO::IVolume> pVolume(DiscIO::CreateVolumeFromFilename(_StartupPara.m_strFilename));
 		if (pVolume == nullptr)
 			break;
 
@@ -223,6 +229,35 @@ bool CBoot::BootUp()
 		VolumeHandler::SetVolumeName(_StartupPara.m_strFilename);
 
 		std::string unique_id = VolumeHandler::GetVolume()->GetUniqueID();
+
+		// Action Replay culling code brute-forcing by penkamaster
+		if (Core::ch_bruteforce)
+		{
+			// load the function addresses from the map file as potential action replay codes
+			std::string userPath = File::GetUserPath(D_MAPS_IDX);
+			std::string userPathScreens = File::GetUserPath(D_SCREENSHOTS_IDX);
+
+			std::string line;
+			std::ifstream myfile( userPath + unique_id + ".map"); //lego starwars
+			std::string gameScrenShotsPath = userPathScreens + unique_id;
+#ifdef _WIN32
+			mkdir(gameScrenShotsPath.c_str());
+#else
+			mkdir(gameScrenShotsPath.c_str(), S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH);
+#endif
+
+			Core::ch_title_id = unique_id;
+			if (myfile.is_open())
+			{
+				while (getline(myfile, line))
+				{
+					line = line.substr(2, 6);
+					Core::ch_map.push_back("04" + line);
+				}
+				myfile.close();
+			}
+		}
+
 		if (unique_id.size() >= 4)
 			VideoInterface::SetRegionReg(unique_id.at(3));
 
@@ -252,6 +287,8 @@ bool CBoot::BootUp()
 		{
 			// Load patches if they weren't already
 			PatchEngine::LoadPatches();
+			RmObjEngine::LoadRmObjs();
+			RmObjEngine::ApplyFrameRmObjs();
 		}
 
 		// Scan for common HLE functions
@@ -267,13 +304,11 @@ bool CBoot::BootUp()
 			}
 		}
 
-		/* Try to load the symbol map if there is one, and then scan it for
-			and eventually replace code */
+		// Try to load the symbol map if there is one, and then scan it for
+		// and eventually replace code
 		if (LoadMapFromFilename())
 			HLE::PatchFunctions();
 
-		// We don't need the volume any more
-		delete pVolume;
 		break;
 	}
 

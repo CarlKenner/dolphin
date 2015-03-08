@@ -16,6 +16,7 @@
 #include "VideoBackends/Software/SWStatistics.h"
 #include "VideoCommon/ImageWrite.h"
 #include "VideoCommon/OnScreenDisplay.h"
+#include "VideoCommon/VR.h"
 
 static GLuint s_RenderTarget = 0;
 
@@ -282,6 +283,8 @@ void SWRenderer::SwapBuffer()
 	glFlush();
 
 	GLInterface->Swap();
+
+	NewVRFrame();
 
 	swstats.ResetFrame();
 

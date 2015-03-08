@@ -2,6 +2,7 @@ set(GUI_SRCS
 	ARCodeAddEdit.cpp
 	AboutDolphin.cpp
 	ConfigMain.cpp
+	ConfigVR.cpp
 	ControllerConfigDiag.cpp
 	Cheats/CheatSearchTab.cpp
 	Cheats/CheatsWindow.cpp
@@ -42,11 +43,13 @@ set(GUI_SRCS
 	NetWindow.cpp
 	PatchAddEdit.cpp
 	PostProcessingConfigDiag.cpp
+	RmObjAddEdit.cpp
 	SoftwareVideoConfigDialog.cpp
 	TASInputDlg.cpp
 	VideoConfigDiag.cpp
 	WXInputBase.cpp
-	WxUtils.cpp)
+	WxUtils.cpp
+	ConfigVR.cpp)
 
 set(NOGUI_SRCS MainNoGUI.cpp)
 
@@ -57,7 +60,7 @@ endif()
 
 set(WXLIBS ${wxWidgets_LIBRARIES} dl)
 
-list(APPEND LIBS core uicommon)
+list(APPEND LIBS core uicommon ovr)
 
 if(ANDROID)
 	list(APPEND LIBS png)
@@ -215,7 +218,7 @@ endif()
 if(USE_X11)
 	set(DOLPHIN_NOGUI_EXE ${DOLPHIN_EXE_BASE}-nogui)
 	add_executable(${DOLPHIN_NOGUI_EXE} ${SRCS} ${NOGUI_SRCS})
-	target_link_libraries(${DOLPHIN_NOGUI_EXE} ${LIBS})
+	target_link_libraries(${DOLPHIN_NOGUI_EXE} ${LIBS} ${wxWidgets_LIBRARIES})
 	set(CPACK_PACKAGE_EXECUTABLES ${CPACK_PACKAGE_EXECUTABLES} ${DOLPHIN_NOGUI_EXE})
 	install(TARGETS ${DOLPHIN_NOGUI_EXE} RUNTIME DESTINATION ${bindir})
 endif()

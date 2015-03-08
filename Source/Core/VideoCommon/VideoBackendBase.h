@@ -6,6 +6,7 @@
 
 #include <string>
 #include <vector>
+#include <thread>
 
 #include "Common/ChunkFile.h"
 #include "VideoCommon/PerfQueryBase.h"
@@ -71,7 +72,9 @@ public:
 	virtual unsigned int PeekMessages() = 0;
 
 	virtual bool Initialize(void *window_handle) = 0;
+	virtual bool InitializeOtherThread(void *window_handle, std::thread *video_thread) = 0;
 	virtual void Shutdown() = 0;
+	virtual void ShutdownOtherThread() = 0;
 	virtual void RunLoop(bool enable) = 0;
 
 	virtual std::string GetName() const = 0;
@@ -79,10 +82,15 @@ public:
 
 	virtual void ShowConfig(void*) = 0;
 
-	virtual void Video_Prepare() = 0;
+	virtual void Video_Prepare() = 0; // called from CPU-GPU thread or Video thread
+	virtual void Video_PrepareOtherThread() = 0; // called from VR thread
 	virtual void Video_EnterLoop() = 0;
 	virtual void Video_ExitLoop() = 0;
+	virtual void Video_AsyncTimewarpDraw() = 0;
+	virtual bool Video_CanDoAsync() { return false; };
+
 	virtual void Video_Cleanup() = 0; // called from gl/d3d thread
+	virtual void Video_CleanupOtherThread() = 0; // called from VR thread
 
 	virtual void Video_BeginField(u32, u32, u32, u32) = 0;
 	virtual void Video_EndField() = 0;
@@ -119,6 +127,8 @@ public:
 	virtual void CheckInvalidState() = 0;
 
 	virtual void UpdateWantDeterminism(bool want) {}
+
+	std::thread *m_video_thread;
 };
 
 extern std::vector<VideoBackend*> g_available_video_backends;
@@ -135,6 +145,7 @@ class VideoBackendHardware : public VideoBackend
 	void Video_ExitLoop() override;
 	void Video_BeginField(u32, u32, u32, u32) override;
 	void Video_EndField() override;
+	void Video_AsyncTimewarpDraw() override;
 
 	u32 Video_AccessEFB(EFBAccessType, u32, u32, u32) override;
 	u32 Video_GetQueryResult(PerfQueryType type) override;

@@ -37,6 +37,7 @@
 #include "VideoCommon/VertexLoaderManager.h"
 #include "VideoCommon/VertexShaderManager.h"
 #include "VideoCommon/VideoConfig.h"
+#include "VideoCommon/VR.h"
 
 namespace DX11
 {
@@ -85,6 +86,11 @@ void InitBackendInfo()
 
 	IDXGIFactory* factory;
 	IDXGIAdapter* ad;
+	//Oculus SDK Bug: Once OpenGL mode has been attached in Direct Mode,
+	//running the next line will cause a crash in Oculus SDK.  Seems to work
+    //If you never ShutdownVR() the OpenGL mode, and never InitVR() for the
+	//Direct3D mode, but that is very hacky.  Running ovr_Initialize(); here stops
+	//crash, bug kills Direct Mode. Wait until SDK fixes this issue?
 	hr = DX11::PCreateDXGIFactory(__uuidof(IDXGIFactory), (void**)&factory);
 	if (FAILED(hr))
 		PanicAlert("Failed to create IDXGIFactory object");
@@ -169,6 +175,12 @@ bool VideoBackend::Initialize(void *window_handle)
 	return true;
 }
 
+bool VideoBackend::InitializeOtherThread(void *window_handle, std::thread *video_thread)
+{
+	m_video_thread = video_thread;
+	return true;
+}
+
 void VideoBackend::Video_Prepare()
 {
 	// internal interfaces
@@ -196,6 +208,12 @@ void VideoBackend::Video_Prepare()
 
 	// Tell the host that the window is ready
 	Host_Message(WM_USER_CREATE);
+}
+
+void VideoBackend::Video_PrepareOtherThread()
+{
+	// In OpenGL this would be GLInterface->MakeCurrent();
+	// probably not needed for multithreaded Direct3D.
 }
 
 void VideoBackend::Shutdown()
@@ -227,10 +245,20 @@ void VideoBackend::Shutdown()
 		delete g_renderer;
 		g_renderer = nullptr;
 		g_texture_cache = nullptr;
+		SConfig::GetInstance().m_LocalCoreStartupParameter.done = true;
+		ShutdownVR();
 	}
 }
 
+void VideoBackend::ShutdownOtherThread()
+{
+}
+
 void VideoBackend::Video_Cleanup()
+{
+}
+
+void VideoBackend::Video_CleanupOtherThread()
 {
 }
 

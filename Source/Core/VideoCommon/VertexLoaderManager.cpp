@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "Common/CommonFuncs.h"
+#include "Core/ConfigManager.h"
 #include "Core/HW/Memmap.h"
 
 #include "VideoCommon/BPMemory.h"
@@ -20,6 +21,7 @@
 #include "VideoCommon/VertexManagerBase.h"
 #include "VideoCommon/VertexShaderManager.h"
 #include "VideoCommon/VideoCommon.h"
+#include "VideoCommon/VR.h"
 
 
 
@@ -138,19 +140,48 @@ static VertexLoaderBase* RefreshLoader(int vtx_attr_group, bool preprocess = fal
 	return loader;
 }
 
-int RunVertices(int vtx_attr_group, int primitive, int count, DataReader src, bool skip_drawing)
+int RunVertices(int vtx_attr_group, int primitive, int count, DataReader src, bool skip_drawing, bool is_preprocess)
 {
 	if (!count)
 		return 0;
 
-	VertexLoaderBase* loader = RefreshLoader(vtx_attr_group);
+	SCoreStartupParameter &m_LocalCoreStartupParameter = SConfig::GetInstance().m_LocalCoreStartupParameter;
 
+	VertexLoaderBase* loader = RefreshLoader(vtx_attr_group, is_preprocess);
 	int size = count * loader->m_VertexSize;
 	if ((int)src.size() < size)
 		return -1;
 
-	if (skip_drawing)
+	if (skip_objects_count < m_LocalCoreStartupParameter.skip_objects_end)
+	{
+		if (++skip_objects_count >= m_LocalCoreStartupParameter.skip_objects_start)
+		{
+			//Skip Object
+			return size;
+		}
+	}
+
+	if (skip_drawing || is_preprocess)
 		return size;
+
+	// Object Removal Code code
+	if (m_LocalCoreStartupParameter.num_object_removal_codes)
+	{
+		if (m_LocalCoreStartupParameter.update)
+		{
+			// Set lock so codes can be enabled/disabled in game without crashes.
+			m_LocalCoreStartupParameter.done = false;
+			for (int current_object_removal_code = 0; current_object_removal_code < m_LocalCoreStartupParameter.num_object_removal_codes; current_object_removal_code++)
+			{
+				if (!memcmp(src.GetPointer(), &m_LocalCoreStartupParameter.object_removal_codes[current_object_removal_code][0], m_LocalCoreStartupParameter.num_object_removal_data_bytes[current_object_removal_code]))
+				{
+					//Data didn't match, try next object_removal_code
+					return size;
+				}
+			}
+		}
+		m_LocalCoreStartupParameter.done = true;
+	}
 
 	// If the native vertex format changed, force a flush.
 	if (loader->m_native_vertex_format != s_current_vtx_fmt)
@@ -173,11 +204,6 @@ int RunVertices(int vtx_attr_group, int primitive, int count, DataReader src, bo
 	ADDSTAT(stats.thisFrame.numPrims, count);
 	INCSTAT(stats.thisFrame.numPrimitiveJoins);
 	return size;
-}
-
-int GetVertexSize(int vtx_attr_group, bool preprocess)
-{
-	return RefreshLoader(vtx_attr_group, preprocess)->m_VertexSize;
 }
 
 NativeVertexFormat* GetCurrentVertexFormat()

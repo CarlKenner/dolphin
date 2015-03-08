@@ -1,4 +1,4 @@
-// Copyright 2013 Dolphin Emulator Project
+// Copyright 2015 Dolphin Emulator Project
 // Licensed under GPLv2
 // Refer to the license.txt file included.
 
@@ -64,6 +64,7 @@
 
 #include "DolphinWX/AboutDolphin.h"
 #include "DolphinWX/ConfigMain.h"
+#include "DolphinWX/ConfigVR.h"
 #include "DolphinWX/ControllerConfigDiag.h"
 #include "DolphinWX/FifoPlayerDlg.h"
 #include "DolphinWX/Frame.h"
@@ -89,6 +90,7 @@
 
 #include "VideoCommon/VideoBackendBase.h"
 #include "VideoCommon/VideoConfig.h"
+#include "VideoCommon/VR.h"
 
 #ifdef _WIN32
 #ifndef SM_XVIRTUALSCREEN
@@ -237,6 +239,7 @@ wxMenuBar* CFrame::CreateMenu()
 	pOptionsMenu->Append(IDM_CONFIG_GFX_BACKEND, _("&Graphics Settings"));
 	pOptionsMenu->Append(IDM_CONFIG_AUDIO, _("&Audio Settings"));
 	pOptionsMenu->Append(IDM_CONFIG_CONTROLLERS, _("&Controller Settings"));
+	pOptionsMenu->Append(IDM_CONFIG_VR, _("&VR Settings"));
 	pOptionsMenu->Append(IDM_CONFIG_HOTKEYS, _("&Hotkey Settings"));
 	if (g_pCodeWindow)
 	{
@@ -258,6 +261,9 @@ wxMenuBar* CFrame::CreateMenu()
 	UpdateWiiMenuChoice(toolsMenu->Append(IDM_LOAD_WII_MENU, "Dummy string to keep wxw happy"));
 
 	toolsMenu->Append(IDM_FIFOPLAYER, _("Fifo Player"));
+
+	toolsMenu->AppendCheckItem(IDM_DEBUGGER, _("Debugger"));
+	toolsMenu->Enable(IDM_DEBUGGER, !UseDebugger);
 
 	toolsMenu->AppendSeparator();
 	wxMenu* wiimoteMenu = new wxMenu;
@@ -572,6 +578,7 @@ void CFrame::PopulateToolbar(wxToolBar* ToolBar)
 	WxUtils::AddToolbarButton(ToolBar, IDM_CONFIG_GFX_BACKEND,  _("Graphics"),    m_Bitmaps[Toolbar_ConfigGFX],   _("Graphics settings"));
 	WxUtils::AddToolbarButton(ToolBar, IDM_CONFIG_AUDIO,        _("Audio"),       m_Bitmaps[Toolbar_ConfigAudio], _("Audio settings"));
 	WxUtils::AddToolbarButton(ToolBar, IDM_CONFIG_CONTROLLERS,  _("Controllers"), m_Bitmaps[Toolbar_Controller],  _("Controller settings"));
+	WxUtils::AddToolbarButton(ToolBar, IDM_CONFIG_VR,             _("VR"),       m_Bitmaps[Toolbar_ConfigVR],   _("VR settings"));
 }
 
 
@@ -618,6 +625,7 @@ void CFrame::InitBitmaps()
 	m_Bitmaps[Toolbar_Controller ].LoadFile(dir + "classic.png",    wxBITMAP_TYPE_PNG);
 	m_Bitmaps[Toolbar_Screenshot ].LoadFile(dir + "screenshot.png", wxBITMAP_TYPE_PNG);
 	m_Bitmaps[Toolbar_FullScreen ].LoadFile(dir + "fullscreen.png", wxBITMAP_TYPE_PNG);
+	m_Bitmaps[Toolbar_ConfigVR  ].LoadFile(dir + "vr.png",         wxBITMAP_TYPE_PNG);
 
 	// Update in case the bitmap has been updated
 	if (m_ToolBar != nullptr)
@@ -638,6 +646,24 @@ void CFrame::BootGame(const std::string& filename)
 
 	if (Core::GetState() != Core::CORE_UNINITIALIZED)
 		return;
+
+	if (g_has_hmd)
+	{
+		wxMessageDialog HealthDlg(
+			this,
+			_("HEALTH & SAFETY WARNING\n\nRead and follow all warnings and instructions\nincluded with the Headset before use. Headset\n"
+			"should be calibrated for each user. Not for use by\nchildren under 7. Stop use if you experience any\n"
+			"discomfort or health reactions.\n\n"
+			"More: www.oculus.com/warnings\n\n"
+			"Do you acknowledge?\n"),
+			_("HEALTH & SAFETY WARNING"),
+			wxYES_NO | wxSTAY_ON_TOP | wxICON_EXCLAMATION,
+			wxDefaultPosition);
+
+		int Ret = HealthDlg.ShowModal();
+		if (Ret != wxID_YES)
+			return;
+	}
 
 	// Start filename if non empty.
 	// Start the selected ISO, or try one of the saved paths.
@@ -947,6 +973,19 @@ void CFrame::ToggleDisplayMode(bool bFullscreen)
 		// Try To Set Selected Mode And Get Results.  NOTE: CDS_FULLSCREEN Gets Rid Of Start Bar.
 		ChangeDisplaySettings(&dmScreenSettings, CDS_FULLSCREEN);
 	}
+	else if (bFullscreen && g_has_hmd)
+	{
+		DEVMODE dmScreenSettings;
+		memset(&dmScreenSettings, 0, sizeof(dmScreenSettings));
+		dmScreenSettings.dmSize = sizeof(dmScreenSettings);
+		dmScreenSettings.dmPelsWidth = g_hmd_window_width;
+		dmScreenSettings.dmPelsHeight = g_hmd_window_height;
+		dmScreenSettings.dmBitsPerPel = 32;
+		dmScreenSettings.dmFields = DM_BITSPERPEL | DM_PELSWIDTH | DM_PELSHEIGHT;
+
+		// Try To Set Selected Mode And Get Results.  NOTE: CDS_FULLSCREEN Gets Rid Of Start Bar.
+		ChangeDisplaySettings(&dmScreenSettings, CDS_FULLSCREEN);
+	}
 	else
 	{
 		// Change to default resolution
@@ -1005,17 +1044,37 @@ void CFrame::StartGame(const std::string& filename)
 			position = wxDefaultPosition;
 #endif
 
+		InitVR(); //Must be done before g_has_hmd is used below.
+
+		VR_RecenterHMD();
+
 		wxSize size(SConfig::GetInstance().m_LocalCoreStartupParameter.iRenderWindowWidth,
 				SConfig::GetInstance().m_LocalCoreStartupParameter.iRenderWindowHeight);
+		// VR window must be a certain size for Head Mounted Displays
+		if (g_has_hmd)
+		{
+			size = wxSize(g_hmd_window_width, g_hmd_window_height);
+			position.x = g_hmd_window_x;
+			position.y = g_hmd_window_y;
+			if (!SConfig::GetInstance().m_LocalCoreStartupParameter.bFullscreen || g_is_direct_mode)
+			{
+				// shift window so border is off-screen
+				position.x -= 4;
+				position.y -= 4;
+			}
+		}
+		else
+		{
 #ifdef _WIN32
-		// Out of desktop check
-		int leftPos = GetSystemMetrics(SM_XVIRTUALSCREEN);
-		int topPos = GetSystemMetrics(SM_YVIRTUALSCREEN);
-		int width =  GetSystemMetrics(SM_CXVIRTUALSCREEN);
-		int height = GetSystemMetrics(SM_CYVIRTUALSCREEN);
-		if ((leftPos + width) < (position.x + size.GetWidth()) || leftPos > position.x || (topPos + height) < (position.y + size.GetHeight()) || topPos > position.y)
-			position.x = position.y = wxDefaultCoord;
+			// Out of desktop check
+			int leftPos = GetSystemMetrics(SM_XVIRTUALSCREEN);
+			int topPos = GetSystemMetrics(SM_YVIRTUALSCREEN);
+			int width = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+			int height = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+			if ((leftPos + width) < (position.x + size.GetWidth()) || leftPos > position.x || (topPos + height) < (position.y + size.GetHeight()) || topPos > position.y)
+				position.x = position.y = wxDefaultCoord;
 #endif
+		}
 		m_RenderFrame = new CRenderFrame((wxFrame*)this, wxID_ANY, _("Dolphin"), position);
 		if (SConfig::GetInstance().m_LocalCoreStartupParameter.bKeepWindowOnTop)
 			m_RenderFrame->SetWindowStyle(m_RenderFrame->GetWindowStyle() | wxSTAY_ON_TOP);
@@ -1047,7 +1106,10 @@ void CFrame::StartGame(const std::string& filename)
 
 	wxBeginBusyCursor();
 
-	DoFullscreen(SConfig::GetInstance().m_LocalCoreStartupParameter.bFullscreen);
+	if (g_is_direct_mode) //If Rift is in Direct Mode, start the mirror windowed.
+		DoFullscreen(FALSE);
+	else
+		DoFullscreen(SConfig::GetInstance().m_LocalCoreStartupParameter.bFullscreen);
 
 	if (!BootManager::BootCore(filename))
 	{
@@ -1066,6 +1128,8 @@ void CFrame::StartGame(const std::string& filename)
 		X11Utils::InhibitScreensaver(X11Utils::XDisplayFromHandle(GetHandle()),
 				X11Utils::XWindowFromHandle(GetHandle()), true);
 #endif
+		SCoreStartupParameter& StartUp = SConfig::GetInstance().m_LocalCoreStartupParameter;
+		VR_SetGame(StartUp.bWii, StartUp.m_BootType == SCoreStartupParameter::BOOT_WII_NAND, StartUp.m_strUniqueID);
 
 		m_RenderParent->SetFocus();
 
@@ -1181,6 +1245,35 @@ void CFrame::DoStop()
 				Core::SetState(state);
 				m_confirmStop = false;
 				return;
+			}
+		}
+		// Save VR game-specific settings
+		if (g_has_hmd && g_Config.VRSettingsModified())
+		{
+			Core::EState state = Core::GetState();
+			Core::SetState(Core::CORE_PAUSE);
+			wxMessageDialog m_StopDlg(
+				this,
+				_("Do you want to save these VR settings for this game?")
+				+ wxString::Format("\n3D: %5.2f units per metre"
+					"\nHUD %5.1fm away, %5.1fm thick, 3D HUD %5.2f closer, aim distance %5.1fm"
+					"\nCamera %5.1fm forward, %5.0f degrees up."
+					"\n\n2D: Screen is %5.1fm high, %5.1fm away, %5.1fm thick, %5.1fm up"
+					"\n2D Camera %5.0f degrees up.",
+					g_Config.fUnitsPerMetre,
+					g_Config.fHudDistance, g_Config.fHudThickness, g_Config.fHud3DCloser, g_Config.fAimDistance, 
+					g_Config.fCameraForward, g_Config.fCameraPitch,
+					g_Config.fScreenHeight, g_Config.fScreenDistance, g_Config.fScreenThickness, g_Config.fScreenUp,
+					g_Config.fScreenPitch),
+				_("Please confirm..."),
+				wxYES_NO | wxSTAY_ON_TOP | wxICON_EXCLAMATION,
+				wxDefaultPosition);
+
+			int Ret = m_StopDlg.ShowModal();
+			if (Ret == wxID_YES)
+			{
+				// save VR settings
+				g_Config.GameIniSave();
 			}
 		}
 
@@ -1348,6 +1441,33 @@ void CFrame::OnConfigControllers(wxCommandEvent& WXUNUSED (event))
 	ControllerConfigDiag config_dlg(this);
 	config_dlg.ShowModal();
 	config_dlg.Destroy();
+}
+
+void CFrame::OnConfigVR(wxCommandEvent& WXUNUSED(event))
+{
+	InputConfig* const pad_plugin = Pad::GetConfig();
+	bool was_init = false;
+	if (g_controller_interface.IsInit()) // check if game is running
+	{
+		was_init = true;
+	}
+	else
+	{
+#if defined(HAVE_X11) && HAVE_X11
+		Window win = X11Utils::XWindowFromHandle(GetHandle());
+		Pad::Initialize(reinterpret_cast<void*>(win));
+#else
+		Pad::Initialize(reinterpret_cast<void*>(GetHandle()));
+#endif
+	}
+	
+	CConfigVR ConfigVR(this);
+	ConfigVR.ShowModal();
+	ConfigVR.Destroy();
+	if (!was_init) // if game isn't running
+	{
+		Pad::Shutdown();
+	}
 }
 
 void CFrame::OnConfigHotkey(wxCommandEvent& WXUNUSED (event))
@@ -1539,6 +1659,61 @@ void CFrame::OnFifoPlayer(wxCommandEvent& WXUNUSED (event))
 	else
 	{
 		m_FifoPlayerDlg = new FifoPlayerDlg(this);
+	}
+}
+
+void CFrame::OnDebugger(wxCommandEvent& WXUNUSED(event))
+{
+	if (!UseDebugger)
+	{
+		UseDebugger = true;
+		this->Maximize(true);
+		g_pCodeWindow = new CCodeWindow(SConfig::GetInstance().m_LocalCoreStartupParameter, this, IDM_CODE_WINDOW);
+		LoadIniPerspectives();
+		g_pCodeWindow->Load();
+
+		wxMenuBar *menu = GetMenuBar();
+		wxMenu* toolsMenu = menu->GetMenu(GetMenuBar()->FindMenu(_("&Tools")));
+		toolsMenu->Enable(IDM_DEBUGGER, false);
+		wxMenu* pOptionsMenu = menu->GetMenu(menu->FindMenu(_("&Options")));
+		pOptionsMenu->AppendSeparator();
+		g_pCodeWindow->CreateMenuOptions(pOptionsMenu);
+		g_pCodeWindow->CreateMenu(SConfig::GetInstance().m_LocalCoreStartupParameter, menu);
+		wxMenu* viewMenu = menu->GetMenu(menu->FindMenu(_("&View")));
+		viewMenu->AppendSeparator();
+		viewMenu->Check(IDM_LOG_WINDOW, g_pCodeWindow->bShowOnStart[0]);
+		const wxString MenuText[] = {
+			wxTRANSLATE("&Registers"),
+			wxTRANSLATE("&Watch"),
+			wxTRANSLATE("&Breakpoints"),
+			wxTRANSLATE("&Memory"),
+			wxTRANSLATE("&JIT"),
+			wxTRANSLATE("&Sound"),
+			wxTRANSLATE("&Video")
+		};
+		for (int i = IDM_REGISTER_WINDOW; i <= IDM_VIDEO_WINDOW; i++)
+		{
+			viewMenu->AppendCheckItem(i, wxGetTranslation(MenuText[i - IDM_REGISTER_WINDOW]));
+			viewMenu->Check(i, g_pCodeWindow->bShowOnStart[i - IDM_LOG_WINDOW]);
+		}
+
+		// Create toolbar
+		RecreateToolbar();
+		if (!SConfig::GetInstance().m_InterfaceToolbar) DoToggleToolbar(false);
+		// Commit
+		m_Mgr->Update();
+
+		if (g_pCodeWindow->AutomaticStart())
+		{
+			BootGame("");
+		}
+
+		// Load perspective
+		DoLoadPerspective();
+		// Update controls
+		UpdateGUI();
+		if (g_pCodeWindow)
+			g_pCodeWindow->UpdateButtonStates();
 	}
 }
 

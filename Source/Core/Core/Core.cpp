@@ -1,4 +1,4 @@
-// Copyright 2013 Dolphin Emulator Project
+// Copyright 2014 Dolphin Emulator Project
 // Licensed under GPLv2
 // Refer to the license.txt file included.
 
@@ -14,6 +14,7 @@
 #include "Common/CommonPaths.h"
 #include "Common/CommonTypes.h"
 #include "Common/CPUDetect.h"
+#include "Common/Event.h"
 #include "Common/MathUtil.h"
 #include "Common/MemoryUtil.h"
 #include "Common/StringUtil.h"
@@ -60,20 +61,48 @@
 #include "DiscIO/FileMonitor.h"
 
 #include "VideoCommon/OnScreenDisplay.h"
+#include "VideoCommon/RenderBase.h"
 #include "VideoCommon/VideoBackendBase.h"
+#include "VideoCommon/VideoConfig.h"
+#include "VideoCommon/VR.h"
 
 // TODO: ugly, remove
 bool g_aspect_wide;
+
+volatile u32 g_drawn_vr = 0;
 
 namespace Core
 {
 
 bool g_want_determinism;
 
+// Action Replay culling code brute-forcing by penkamaster
+// count down to take a screenshot
+int ch_tomarFoto;
+// current code
+int ch_codigoactual;
+// move on to next code?
+bool ch_next_code;
+// start searching
+bool ch_comenzar_busqueda;
+// number of windows messages without saving a screenshot
+int ch_cicles_without_snapshot;
+// search last
+bool ch_cacheo_pasado;
+// emulator is in action replay culling code brute-forcing mode
+bool ch_bruteforce;
+
+std::vector<std::string> ch_map;
+std::string ch_title_id;
+std::string ch_code;
+
+
 // Declarations and definitions
 static Common::Timer s_timer;
+static Common::Timer s_vr_timer;
 static volatile u32 s_drawn_frame = 0;
 static u32 s_drawn_video = 0;
+static float s_vr_fps = 0;
 
 // Function forwarding
 void Callback_WiimoteInterruptChannel(int _number, u16 _channelID, const void* _pData, u32 _Size);
@@ -87,7 +116,13 @@ static bool s_is_started = false;
 static void* s_window_handle = nullptr;
 static std::string s_state_filename;
 static std::thread s_emu_thread;
+static std::thread s_vr_thread;
 static StoppedCallbackFunc s_on_stopped_callback = nullptr;
+
+static Common::Event s_vr_thread_ready;
+static Common::Event s_nonvr_thread_ready;
+static bool s_stop_vr_thread = false;
+static bool s_vr_thread_failure = false;
 
 static std::thread s_cpu_thread;
 static bool s_request_refresh_info = false;
@@ -181,6 +216,21 @@ bool Init()
 		// The Emu Thread was stopped, synchronize with it.
 		s_emu_thread.join();
 	}
+#ifdef OCULUSSDK042
+	if (s_vr_thread.joinable())
+	{
+		if (IsRunning())
+		{
+			PanicAlertT("VR Thread already running");
+			return false;
+		}
+		s_stop_vr_thread = true;
+		s_nonvr_thread_ready.Set();
+
+		// The VR Thread was stopped, synchronize with it.
+		s_vr_thread.join();
+	}
+#endif
 
 	Core::UpdateWantDeterminism(/*initial*/ true);
 
@@ -274,6 +324,9 @@ static void CpuThread()
 	}
 	#endif
 
+	// VR thread starts main loop in background
+	s_nonvr_thread_ready.Set();
+
 	// Enter CPU run loop. When we leave it - we are done.
 	CCPU::Run();
 
@@ -318,6 +371,53 @@ static void FifoPlayerThread()
 	return;
 }
 
+#ifdef OCULUSSDK042
+// VR Asynchronous Timewarp Thread
+void VRThread()
+{
+	Common::SetCurrentThreadName("VR Thread");
+
+	const SCoreStartupParameter& _CoreParameter =
+		SConfig::GetInstance().m_LocalCoreStartupParameter;
+
+	std::thread *video_thread = &s_emu_thread;
+	if (!_CoreParameter.bCPUThread)
+		video_thread = &s_cpu_thread;
+
+	NOTICE_LOG(VR, "[VR Thread] Starting VR Thread - g_video_backend->Initialize()");
+	if (!g_video_backend->InitializeOtherThread(s_window_handle, video_thread))
+	{
+		s_vr_thread_failure = true;
+		s_vr_thread_ready.Set();
+		return;
+	}
+	s_vr_thread_ready.Set();
+	s_nonvr_thread_ready.Wait();
+
+	NOTICE_LOG(VR, "[VR Thread] g_video_backend->Video_Prepare()");
+	g_video_backend->Video_PrepareOtherThread();
+	s_vr_thread_ready.Set();
+	s_nonvr_thread_ready.Wait();
+
+	NOTICE_LOG(VR, "[VR Thread] Main VR loop");
+	while (!s_stop_vr_thread)
+	{
+		if (g_renderer)
+			g_renderer->AsyncTimewarpDraw();
+	}
+
+	g_video_backend->Video_CleanupOtherThread();
+	s_vr_thread_ready.Set();
+	s_nonvr_thread_ready.Wait();
+
+	NOTICE_LOG(VR, "[VR Thread] g_video_backend->Shutdown()");
+	g_video_backend->ShutdownOtherThread();
+	s_vr_thread_ready.Set();
+
+	NOTICE_LOG(VR, "[VR Thread] Stopping VR Thread");
+}
+#endif
+
 // Initialize and create emulation thread
 // Call browser: Init():s_emu_thread().
 // See the BootManager.cpp file description for a complete call schedule.
@@ -338,11 +438,46 @@ void EmuThread()
 
 	HW::Init();
 
-	if (!g_video_backend->Initialize(s_window_handle))
+	// Initialize backend, and optionally VR thread for asynchronous timewarp rendering
+#ifdef OCULUSSDK042
+	if (core_parameter.bAsynchronousTimewarp && g_video_backend->Video_CanDoAsync())
 	{
-		PanicAlert("Failed to initialize video backend!");
-		Host_Message(WM_USER_STOP);
-		return;
+		if (!g_video_backend->Initialize(nullptr))
+		{
+			PanicAlert("Failed to initialize video backend!");
+			Host_Message(WM_USER_STOP);
+			return;
+		}
+		g_Config.bAsynchronousTimewarp = true;
+		g_ActiveConfig.bAsynchronousTimewarp = g_Config.bAsynchronousTimewarp;
+
+		// Start the VR thread
+		s_stop_vr_thread = false;
+		s_vr_thread_failure = false;
+		s_nonvr_thread_ready.Reset();
+		s_vr_thread_ready.Reset();
+		s_vr_thread = std::thread(VRThread);
+		s_vr_thread_ready.Wait();
+		if (s_vr_thread_failure)
+		{
+			PanicAlert("Failed to initialize video backend in VR Thread!");
+			s_vr_thread.join();
+			Host_Message(WM_USER_STOP);
+			return;
+		}
+	}
+	else
+#endif
+	{
+		if (!g_video_backend->Initialize(s_window_handle))
+		{
+			PanicAlert("Failed to initialize video backend!");
+			Host_Message(WM_USER_STOP);
+			return;
+		}
+		g_Config.bAsynchronousTimewarp = false;
+		g_ActiveConfig.bAsynchronousTimewarp = g_Config.bAsynchronousTimewarp;
+
 	}
 
 	OSD::AddMessage("Dolphin " + g_video_backend->GetName() + " Video Backend.", 5000);
@@ -411,6 +546,15 @@ void EmuThread()
 	else
 		cpuThreadFunc = CpuThread;
 
+	// 	On VR Thread: g_video_backend->Video_PrepareOtherThread();
+#ifdef OCULUSSDK042
+	if (g_Config.bAsynchronousTimewarp)
+	{
+		s_nonvr_thread_ready.Set();
+		s_vr_thread_ready.Wait();
+	}
+#endif
+
 	// ENTER THE VIDEO THREAD LOOP
 	if (core_parameter.bCPUThread)
 	{
@@ -422,6 +566,9 @@ void EmuThread()
 
 		// Spawn the CPU thread
 		s_cpu_thread = std::thread(cpuThreadFunc);
+
+		// VR thread starts main loop in background
+		s_nonvr_thread_ready.Set();
 
 		// become the GPU thread
 		g_video_backend->Video_EnterLoop();
@@ -463,8 +610,20 @@ void EmuThread()
 
 	INFO_LOG(CONSOLE, "%s", StopMessage(true, "CPU thread stopped.").c_str());
 
+#ifdef OCULUSSDK042
+	if (g_Config.bAsynchronousTimewarp)
+	{
+		// Tell the VR Thread to stop
+		s_nonvr_thread_ready.Set();
+		s_stop_vr_thread = true;
+		s_vr_thread_ready.Wait();
+	}
+#endif
+
 	if (core_parameter.bCPUThread)
+	{
 		g_video_backend->Video_Cleanup();
+	}
 
 	VolumeHandler::EjectVolume();
 	FileMon::Close();
@@ -484,7 +643,17 @@ void EmuThread()
 	Keyboard::Shutdown();
 	Pad::Shutdown();
 
+
+	// Oculus Rift VR thread
+#ifdef OCULUSSDK042
+	if (g_Config.bAsynchronousTimewarp)
+	{
+		s_stop_vr_thread = true;
+		s_vr_thread.join();
+	}
+#endif
 	g_video_backend->Shutdown();
+
 	AudioCommon::ShutdownSoundStream();
 
 	INFO_LOG(CONSOLE, "%s", StopMessage(true, "Main Emu thread stopped").c_str());
@@ -619,6 +788,7 @@ void VideoThrottle()
 		s_timer.Update();
 		Common::AtomicStore(s_drawn_frame, 0);
 		s_drawn_video = 0;
+		Common::AtomicStore(g_drawn_vr, 0);
 	}
 
 	s_drawn_video++;
@@ -636,6 +806,43 @@ bool ShouldSkipFrame(int skipped)
 	const bool fps_slow = !(s_timer.GetTimeDifference() < (frames + skipped) * 1000 / TargetFPS);
 
 	return fps_slow;
+}
+
+// Executed from GPU thread
+// reports if a frame should be added or not
+// in order to keep up 75 FPS
+bool ShouldAddTimewarpFrame()
+{
+#if 0
+	if (s_is_stopping)
+		return false;
+	static u32 timewarp_count = 0;
+	Common::AtomicIncrement(g_drawn_vr);
+	// Update info per second
+	u32 ElapseTime = (u32)s_vr_timer.GetTimeDifference();
+	bool vr_slow = (timewarp_count < g_ActiveConfig.iMinExtraFrames) || (ElapseTime > (Common::AtomicLoad(g_drawn_vr) + 0.33) * 1000.0 / 75);
+	if (vr_slow)
+	{
+		++timewarp_count;
+		if (timewarp_count > g_ActiveConfig.iMaxExtraFrames)
+		{
+			timewarp_count = 0;
+			vr_slow = false;
+		}
+		else
+		{
+			return true;
+		}
+	}
+	if ((ElapseTime >= 1000 && g_drawn_vr > 0) || s_request_refresh_info)
+	{
+		s_vr_fps = (float)(Common::AtomicLoad(g_drawn_vr) * 1000.0 / ElapseTime);
+		// Reset counter
+		s_vr_timer.Update();
+		Common::AtomicStore(g_drawn_vr, 0);
+	}
+#endif
+	return false;
 }
 
 // --- Callbacks for backends / engine ---
@@ -659,6 +866,7 @@ void UpdateTitle()
 
 	float FPS = (float) (Common::AtomicLoad(s_drawn_frame) * 1000.0 / ElapseTime);
 	float VPS = (float) (s_drawn_video * 1000.0 / ElapseTime);
+	float VRPS = (float) (Common::AtomicLoad(g_drawn_vr) * 1000.0 / ElapseTime);
 	float Speed = (float) (s_drawn_video * (100 * 1000.0) / (VideoInterface::TargetRefreshRate * ElapseTime));
 
 	// Settings are shown the same for both extended and summary info
@@ -668,12 +876,12 @@ void UpdateTitle()
 	std::string SFPS;
 
 	if (Movie::IsPlayingInput())
-		SFPS = StringFromFormat("VI: %u/%u - Input: %u/%u - FPS: %.0f - VPS: %.0f - %.0f%%", (u32)Movie::g_currentFrame, (u32)Movie::g_totalFrames, (u32)Movie::g_currentInputCount, (u32)Movie::g_totalInputCount, FPS, VPS, Speed);
+		SFPS = StringFromFormat("VI: %u/%u - Input: %u/%u - FPS: %.0f - VPS: %.0f - VR: %.0f - %.0f%%", (u32)Movie::g_currentFrame, (u32)Movie::g_totalFrames, (u32)Movie::g_currentInputCount, (u32)Movie::g_totalInputCount, FPS, VPS, VRPS, Speed);
 	else if (Movie::IsRecordingInput())
-		SFPS = StringFromFormat("VI: %u - Input: %u - FPS: %.0f - VPS: %.0f - %.0f%%", (u32)Movie::g_currentFrame, (u32)Movie::g_currentInputCount, FPS, VPS, Speed);
+		SFPS = StringFromFormat("VI: %u - Input: %u - FPS: %.0f - VPS: %.0f - VR: %.0f - %.0f%%", (u32)Movie::g_currentFrame, (u32)Movie::g_currentInputCount, FPS, VPS, VRPS, Speed);
 	else
 	{
-		SFPS = StringFromFormat("FPS: %.0f - VPS: %.0f - %.0f%%", FPS, VPS, Speed);
+		SFPS = StringFromFormat("FPS: %.0f - VPS: %.0f - VR: %.0f - %.0f%%", FPS, VPS, VRPS, Speed);
 		if (SConfig::GetInstance().m_InterfaceExtendedFPSInfo)
 		{
 			// Use extended or summary information. The summary information does not print the ticks data,
@@ -708,7 +916,14 @@ void UpdateTitle()
 	if (g_sound_stream)
 	{
 		CMixer* pMixer = g_sound_stream->GetMixer();
-		pMixer->UpdateSpeed((float)Speed / 100);
+
+		// VR requires a head-tracking rate greater than 60fps per second. This is solved by 
+		// running the game at 100%, but the head-tracking frame rate at 125%. To bring the audio 
+		// back to 100% speed, it must be slowed down by 25%
+		if (g_has_hmd && !SConfig::GetInstance().m_LocalCoreStartupParameter.bSyncGPU && SConfig::GetInstance().m_LocalCoreStartupParameter.m_GPUDeterminismMode != GPU_DETERMINISM_FAKE_COMPLETION && (g_ActiveConfig.bPullUp20fps || g_ActiveConfig.bPullUp30fps || g_ActiveConfig.bPullUp60fps || g_ActiveConfig.bPullUp20fpsTimewarp || g_ActiveConfig.bPullUp30fpsTimewarp || g_ActiveConfig.bPullUp60fpsTimewarp))
+			pMixer->UpdateSpeed((float)Speed / 125);
+		else
+			pMixer->UpdateSpeed((float)Speed / 100);
 	}
 
 	Host_UpdateTitle(SMessage);

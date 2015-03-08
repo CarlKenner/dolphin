@@ -12,6 +12,7 @@
 #include "Core/Core.h"
 #include "Core/MemTools.h"
 #include "Core/PatchEngine.h"
+#include "Core/RmObjEngine.h"
 #include "Core/VolumeHandler.h"
 #include "Core/Boot/Boot.h"
 #include "Core/HLE/HLE.h"
@@ -153,6 +154,8 @@ bool CBoot::EmulatedBS2_GC(bool skipAppLoader)
 
 	// Load patches
 	PatchEngine::LoadPatches();
+	RmObjEngine::LoadRmObjs();
+	RmObjEngine::ApplyFrameRmObjs();
 
 	// If we have any patches that need to be applied very early, here's a good place
 	PatchEngine::ApplyFramePatches();
@@ -409,6 +412,8 @@ bool CBoot::EmulatedBS2_Wii()
 
 		// Load patches and run startup patches
 		PatchEngine::LoadPatches();
+		RmObjEngine::LoadRmObjs();
+		RmObjEngine::ApplyFrameRmObjs();
 
 		// return
 		PC = PowerPC::ppcState.gpr[3];
